@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+.freebuff/
+memory.json
+projects/
+*.log
