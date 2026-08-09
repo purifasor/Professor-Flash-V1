@@ -59,36 +59,32 @@ class Learn:
 
     # -------------------------------------------------------------- recall
     def recall(self, question: str):
-        """Return the best matching learned note or None (score >= 0.55)."""
+        """Return the best matching learned note or None.
+
+        Recall is deliberately strict: it only fires when the new question is
+        essentially the same text as a learned one (>=75% identical). This
+        keeps learned answers reliable - a question like «چطوری برنامه بسازم؟»
+        must never recall an unrelated note about a different topic just
+        because they share common words.
+        """
         from . import persian
         s = persian.soft(question)
         best, best_score = None, 0.0
         for entry in self.index["entries"]:
             q = persian.soft(entry.get("question", ""))
-            t = persian.soft(entry.get("topic", ""))
-            if not q and not t:
+            if not q or not s:
                 continue
-            # containment scores
-            if q and (q in s or s in q):
-                sc = min(1.0, len(q) / max(len(s), 1)) + 0.35
-            elif t and (t in s or s in t):
-                sc = min(0.8, len(t) / max(len(s), 1)) + 0.15
+            if q == s:
+                sc = 1.5
+            elif q in s or s in q:
+                ratio = min(len(q), len(s)) / max(len(q), len(s))
+                sc = 0.9 + 0.3 * ratio if ratio >= 0.7 else 0
             else:
-                # token overlap
-                qw = set(persian.words(q)) if q else set()
-                sw = set(persian.words(s))
-                if qw and sw:
-                    inter = len(qw & sw)
-                    if inter >= 2:
-                        sc = inter / max(len(sw), 1)
-                    else:
-                        sc = 0
-                else:
-                    sc = 0
+                sc = 0
             if sc > best_score:
                 best_score = sc
                 best = entry
-        if best is None or best_score < 0.55:
+        if best is None or best_score < 1.1:
             return None
         try:
             with open(os.path.join(self.root, best["digest"] + ".json"), "r", encoding="utf-8") as f:

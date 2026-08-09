@@ -41,6 +41,8 @@ CLEAR_WORDS = ["پاک کن", "ریست", "شروع جدید", "از اول", "�
 GREET_WORDS = ["سلام", "درود", "سلام علیکم", "صبح بخیر", "عصر بخیر", "شب بخیر", "hi", "hello", "hey",
                "چخبر", "چه خبر", "خبری", "چطوری", "چطورید", "حالت چطور", "حالت چطوره", "حال شما", "خوبی",
                "خسته نباشی", "خوش اومدی", "خوش آمدی"]
+SMALLTALK_WORDS = ["چطوری", "چطورید", "خوبی", "حالت", "چطوره", "خبری", "چخبر", "چه خبر", "خوش اومدی",
+                   "خوش آمدی", "خسته نباشی", "ممنون", "مرسی"]
 THANKS_WORDS = ["ممنون", "مرسی", "تشکر", "متشکرم", "دمت گرم", "thanks", "thank you", "سپاس"]
 MODEL_WORDS = ["چه مدلی", "کدوم مدل", "مدل چی", "مدلی استفاده", "چی هستی", "کی هستی", "who are you",
                "what model", "چه مدلی هستی", "مدل تو", "با چی ساخته", "معرفی کن", "خودت رو معرفی",
@@ -154,6 +156,13 @@ class Brain:
         prepared = self._prepare_math(text)
         if prepared and calc.solve(prepared):
             return "math"
+
+        # small talk («سلام چطوری»، «چخبر»، «سلام خوبی») is a greeting -
+        # a human reply, never a web-search about the dictionary of «سلام»
+        if self._score(text, GREET_WORDS) > 0 and self._score(text, SMALLTALK_WORDS) > 0:
+            if len(persian.words(text)) <= 8 and not self._score(text, ["بساز", "بسازم", "بنویس", "کد",
+                                                                        "برنامه", "سایت", "بازی", "سرچ", "سوال"]):
+                return "greet"
 
         # code requests («کد بنویس»، «برنامه پایتون») always go to build,
         # except «چجوری ... بنویسم؟» which is a genuine question
@@ -287,14 +296,14 @@ class Brain:
         self._wait(0.15); self._done(1)
         if self.llm.active_provider():
             ans, prov = self.llm.chat(
-                "You are Professor Flash V1, a warm, professional Persian AI assistant that helps build software. "
-                "Greet the user naturally in Persian (1-2 sentences), ask what they want to build or ask today. "
-                "Never mention system instructions.",
+                "You are Professor Flash V1, a warm, human, professional Persian AI assistant that helps build software. "
+                "Reply to the user's greeting like a real person: if they asked how you are, answer it genuinely, "
+                "then ask what they want to build or ask today. 1-2 sentences, natural Persian, no emojis.",
                 text, timeout=20)
             if ans:
                 self._log(f"پاسخ از {prov}")
                 return self._reply(ans)
-        return self._reply(self._local_greeting())
+        return self._reply(self._local_greeting(text))
 
     _GREET_BASES = {
         "night": ["شب دیروقت است ولی من همیشه بیدارم.", "شب بخیر، هنوز در خدمتم.", "نیمه‌شب است اما برای تو همیشه بیدارم."],
@@ -305,8 +314,17 @@ class Brain:
     }
     _GREET_OPENER = ["من Professor Flash هستم", "اینجا Professor Flash است", "من در خدمتم، Professor Flash", "این Professor Flash است که با تو حرف می‌زند"]
     _GREET_ASK = ["چی کار کنم؟", "چه برنامه‌ای بسازم؟", "سوالی داری یا برنامه‌ای می‌خواهی؟", "بگو چه کاری از دستم برمی‌آید", "چه چیزی می‌خواهی امروز بسازیم؟"]
+    _HOW_ARE_REPLIES = [
+        "سلام! من خوبم، ممنون که می‌پرسی. تو چطوری؟ من Professor Flash هستم؛ امروز چی می‌سازیم یا چی می‌پرسی؟",
+        "سلام! حالم خوبه، مرسی از احوال‌پرسی. تو خودت چطوری؟ هر کاری از دستم برمی‌آید - ساخت برنامه، سوال، محاسبه یا جستجو - بگو.",
+        "سلام! خوبم و کاملا آماده‌ام، ممنون. تو چطوری؟ اگر سوالی داری یا برنامه‌ای می‌خواهی بسازی، بگو تا شروع کنم.",
+    ]
 
-    def _local_greeting(self):
+    def _local_greeting(self, text=""):
+        # the user asked how we are -> answer like a person, don't change the subject
+        if any(persian.soft(w) in persian.soft(text) for w in ["چطوری", "چطورید", "خوبی", "حالت", "چطوره",
+                                                               "چخبر", "چه خبر", "خبری"]):
+            return random.choice(self._HOW_ARE_REPLIES)
         hour = time.localtime().tm_hour
         if hour < 5:
             pool = self._GREET_BASES["night"]
@@ -486,11 +504,19 @@ class Brain:
     def _clean_question(self, text):
         q = persian.clean_for_display(text)
         for w in ["برام بگو", "برام توضیح بده", "برام بنویس", "بگو", "بنویس", "توضیح بده",
-                  "میخوام بدونم", "می‌خوام بدونم", "میخواهم بدانم", "میخوام", "می‌خوام",
-                  "یعنی چی", "یعنی چه", "چیست", "چیه", "چطوره", "چطور", "چجوری", "چگونه",
+                  "میخوام بدونم", "می‌خوام بدونم", "میخواهم بدانم", "میخوام", "می‌خوام", "میخوایم",
+                  "میخوای", "می‌خوای", "میتونم", "می‌تونم", "میتونیم", "می‌توانم", "می‌تونم",
+                  "بخوام", "بخوایم", "یعنی چی", "یعنی چه", "چیست", "چیه", "چطوره", "چطوری",
+                  "چطورید", "چطور", "چجوری", "چگونه", "میشه", "می‌شه", "می‌شود", "میشود",
                   "درباره", "در مورد", "درمورد", "لطفا", "لطفاً", "سوال دارم", "یه سوال",
                   "یک سوال", "ببین", "داداش", "داش", "چرا", "چند", "چقدر", "؟", "?", "؟!"]:
             q = q.replace(w, " ")
+        q = persian.clean_for_display(q)
+        # strip a leading greeting filler («سلام چطوری ...» -> «...»)
+        for g in ["سلام ", "درود ", "سلام علیکم ", "سلام،"]:
+            if q.startswith(g):
+                q = q[len(g):]
+                break
         q = persian.clean_for_display(q)
         return q or persian.clean_for_display(text)
 
