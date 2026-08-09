@@ -77,7 +77,7 @@ function addMessage(role, text, mid, animate) {
     <div class="avatar">${role === "user" ? "شما" : "PF"}</div>
     <div class="bubble">${esc(text)}${actions}</div>`;
   chatEl.appendChild(wrap);
-  if (animate !== false) scrollDown();
+  if (animate !== false) scrollDown(role === "user");
   return wrap;
 }
 
@@ -90,7 +90,7 @@ function addNote(text) {
   return n;
 }
 
-function thinkingBubble(text) {
+function thinkingBubble() {
   const wrap = document.createElement("div");
   wrap.className = "msg bot";
   wrap.id = "thinking";
@@ -98,16 +98,17 @@ function thinkingBubble(text) {
     <div class="avatar">PF</div>
     <div class="bubble thinking">
       <div class="dots"><span></span><span></span><span></span></div>
-      <span class="think-text">${esc(text || "در حال فکر کردن...")}</span>
+      <span class="think-text">در حال فکر کردن...</span>
     </div>`;
   chatEl.appendChild(wrap);
   scrollDown();
   return wrap;
 }
 
-function updateThinking(text) {
+function updateThinking() {
+  // the chat shows only a loader; details live in the sandbox panel
   const el = $("thinking");
-  if (el) el.querySelector(".think-text").textContent = text || "در حال فکر کردن...";
+  if (el) el.querySelector(".think-text").textContent = "در حال فکر کردن...";
 }
 
 function removeThinking() {
@@ -115,10 +116,21 @@ function removeThinking() {
   if (el) el.remove();
 }
 
-function scrollDown() {
+function nearBottom() {
   const sc = $("chatScroll");
-  sc.scrollTop = sc.scrollHeight;
+  return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
 }
+
+function scrollDown(force) {
+  const sc = $("chatScroll");
+  if (force || nearBottom()) sc.scrollTop = sc.scrollHeight;
+  $("btnScrollDown").hidden = nearBottom();
+}
+
+$("chatScroll").addEventListener("scroll", () => {
+  $("btnScrollDown").hidden = nearBottom();
+});
+$("btnScrollDown").addEventListener("click", () => scrollDown(true));
 
 /* ------------------------------------------------------------- sandbox */
 function setTaskStatus(status) {
@@ -195,8 +207,7 @@ async function pollTask(tid) {
     if (t.files) renderFiles(t.files);
 
     if (t.status === "running" || t.status === "queued" || t.status === "paused") {
-      const pending = (t.todos || []).find((x) => !x.done);
-      updateThinking(pending ? pending.text : t.status === "queued" ? "در صف انتظار..." : "در حال فکر کردن...");
+      updateThinking();
       controlsEl.hidden = false;
       $("btnPause").disabled = t.status !== "running";
       $("btnResume").disabled = t.status !== "paused";
@@ -251,7 +262,7 @@ async function send(text) {
 
   addMessage("user", text, null);
   heroEl.classList.remove("show");
-  thinkingBubble("در حال فکر کردن...");
+  thinkingBubble();
   renderTodos([]);
   renderLogs([]);
   renderFiles([]);
@@ -307,6 +318,17 @@ inputEl.addEventListener("keydown", (e) => {
   }
 });
 $("btnSend").addEventListener("click", () => send(inputEl.value));
+$("btnSearch").addEventListener("click", () => {
+  const v = inputEl.value.trim();
+  if (!v) {
+    addNote("برای جستجو، چیزی بنویس و روی این دکمه بزن - یا بنویس: سرچ کن درباره...");
+    inputEl.focus();
+    return;
+  }
+  inputEl.value = "";
+  autoGrow();
+  send("سرچ کن " + v);
+});
 
 /* ------------------------------------------------------------ controls */
 $("btnPause").addEventListener("click", () => fetch("/api/task/" + state.taskId + "/pause", { method: "POST" }));

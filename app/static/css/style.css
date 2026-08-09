@@ -282,10 +282,29 @@ body::before {
   padding: 10px 14px; flex: none;
   box-shadow: 0 0 18px rgba(124,58,237,.35);
 }
+.btn.search {
+  background: transparent; border-color: var(--line-2);
+  color: var(--muted); border-radius: 12px; padding: 10px 12px; flex: none;
+}
+.btn.search:hover { color: var(--accent-2); border-color: rgba(6,182,212,.5); background: rgba(6,182,212,.08); }
 .btn.send:hover { filter: brightness(1.15); transform: translateY(-1px); }
 .btn.send:disabled { opacity: .45; cursor: not-allowed; transform: none; filter: none; }
 .btn.ctrl { padding: 7px 12px; font-size: 12px; }
 .btn.ctrl.danger:hover { border-color: rgba(248,113,113,.6); background: rgba(248,113,113,.12); color: var(--err); }
+
+/* scroll-to-bottom floating button */
+.chat-scroll { position: relative; }
+.scroll-down {
+  position: absolute; bottom: 14px; left: 18px; z-index: 5;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: var(--panel-2); border: 1px solid var(--line-2);
+  color: var(--muted); cursor: pointer;
+  display: grid; place-items: center; line-height: 0;
+  box-shadow: 0 6px 22px rgba(0,0,0,.5);
+  transition: all .18s;
+}
+.scroll-down:hover { color: var(--accent-2); border-color: rgba(6,182,212,.5); transform: translateY(-2px); }
+.scroll-down svg { width: 18px; height: 18px; }
 
 /* ------------------------------------------------------------ sandbox */
 .sandbox {

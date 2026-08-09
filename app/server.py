@@ -118,6 +118,19 @@ def _watchdog():
 threading.Thread(target=_watchdog, daemon=True).start()
 
 
+def _warmup():
+    """Resolve provider state in the background so the first question/build
+    does not pay the cold-chain cost. Layer-1 messages never wait for it."""
+    time.sleep(4)
+    try:
+        llm.chat("You are a tiny warm-up probe. Reply with exactly: OK", "", timeout=20)
+    except Exception:
+        pass
+
+
+threading.Thread(target=_warmup, daemon=True).start()
+
+
 def _process_queue():
     with TASKS_LOCK:
         while QUEUE:

@@ -211,12 +211,14 @@ class Llm:
             }
 
     def active_provider(self):
-        """Human description of the first provider that has answered OK."""
+        """Human description of the first provider that has answered OK.
+
+        Only returns a provider that actually worked before - never probes,
+        so layer-1 (fast) messages stay instant.
+        """
         for key, _, fa in _PROVIDERS:
             if _status[key].get("ok") is True:
                 return fa
-        if _ollama_models():
-            return "Ollama (محلی - آفلاین)"
         return None
 
     def note(self, key, ok, model=None):

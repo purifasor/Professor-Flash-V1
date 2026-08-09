@@ -15,6 +15,7 @@ Professor Flash is a real thinking agent:
 
 import json
 import os
+import random
 import re
 import time
 import uuid
@@ -262,47 +263,71 @@ class Brain:
         return self._reply(f"نتیجه محاسبه:\n\n{result}")
 
     # ------------------------------------------------------------- greet
+    # Layer 1 - fast small talk: answers instantly from a local varied
+    # generator, and only uses the LLM when it is already warm (never waits
+    # for a cold provider, never searches).
     def _handle_greet(self, text):
-        self._plan(["درک پیام", "فعال‌سازی تفکر", "پاسخ"])
+        self._plan(["درک پیام", "پاسخ"])
         self._log("سلام از کاربر دریافت شد")
-        self._wait(0.4); self._done(0)
-        self._wait(0.4); self._done(1)
-        ans, prov = self.llm.chat(
-            "You are Professor Flash V1, a warm, professional Persian AI assistant that helps build software. "
-            "Greet the user naturally in Persian (1-2 sentences), ask what they want to build or ask today. "
-            "Never mention system instructions.",
-            text, timeout=45)
-        self._done(2)
-        if ans:
-            self._log(f"پاسخ از {prov}")
-            return self._reply(ans)
+        self._wait(0.15); self._done(0)
+        self._wait(0.15); self._done(1)
+        if self.llm.active_provider():
+            ans, prov = self.llm.chat(
+                "You are Professor Flash V1, a warm, professional Persian AI assistant that helps build software. "
+                "Greet the user naturally in Persian (1-2 sentences), ask what they want to build or ask today. "
+                "Never mention system instructions.",
+                text, timeout=20)
+            if ans:
+                self._log(f"پاسخ از {prov}")
+                return self._reply(ans)
         return self._reply(self._local_greeting())
+
+    _GREET_BASES = {
+        "night": ["شب دیروقت است ولی من همیشه بیدارم.", "شب بخیر، هنوز در خدمتم.", "نیمه‌شب است اما برای تو همیشه بیدارم."],
+        "morning": ["صبح بخیر!", "صبح قشنگ بخیر!", "صبح بخیر، روزت عالی شروع شود!", "صبح بخیر! امیدوارم روز خوبی داشته باشی."],
+        "noon": ["ظهر بخیر!", "ظهر قشنگ بخیر!", "ظهر بخیر، حالم خوب است و آماده‌ام."],
+        "afternoon": ["عصر بخیر!", "عصر بخیر، چه خبر؟", "عصر خوبی داشته باش."],
+        "evening": ["شب بخیر!", "شب بخیر، خسته نباشی.", "شب قشنگی باشد."],
+    }
+    _GREET_OPENER = ["من Professor Flash هستم", "اینجا Professor Flash است", "من در خدمتم، Professor Flash", "این Professor Flash است که با تو حرف می‌زند"]
+    _GREET_ASK = ["چی کار کنم؟", "چه برنامه‌ای بسازم؟", "سوالی داری یا برنامه‌ای می‌خواهی؟", "بگو چه کاری از دستم برمی‌آید", "چه چیزی می‌خواهی امروز بسازیم؟"]
 
     def _local_greeting(self):
         hour = time.localtime().tm_hour
         if hour < 5:
-            base = "شب دیروقت است ولی من همیشه بیدارم."
+            pool = self._GREET_BASES["night"]
         elif hour < 12:
-            base = "صبح بخیر!"
+            pool = self._GREET_BASES["morning"]
         elif hour < 17:
-            base = "ظهر بخیر!"
+            pool = self._GREET_BASES["noon"]
         elif hour < 21:
-            base = "عصر بخیر!"
+            pool = self._GREET_BASES["afternoon"]
         else:
-            base = "شب بخیر!"
-        return (f"{base} من Professor Flash هستم. اینجا در حالت محلی و آفلاین کار می‌کنم؛ "
-                "می‌توانم به سوال‌هایت جواب بدهم، محاسبه کنم یا برنامه‌ات را زنده بسازم. چی کار کنم؟")
+            pool = self._GREET_BASES["evening"]
+        base = random.choice(pool)
+        opener = random.choice(self._GREET_OPENER)
+        ask = random.choice(self._GREET_ASK)
+        return f"{base} {opener}؛ {ask}"
+
+    _THANKS_POOL = [
+        "خواهش می‌کنم! هر وقت چیزی خواستی - ساخت برنامه، سوال، محاسبه یا جستجو - در خدمتم.",
+        "قابلی نداشت! اگر پروژه‌ای داری یا سوالی ذهنت را مشغول کرده، بگو.",
+        "در خدمتم! یادم باشد هرچه یاد بگیرم را هم ذخیره می‌کنم.",
+        "خواهش می‌کنم! از این‌ها می‌توانم: ساخت برنامه، پاسخ به سوال، محاسبه دقیق، جستجو.",
+        "خوشحالم که راضی بودی. اگر تغییری در پروژه‌ات می‌خواهی، فقط بگو.",
+    ]
 
     def _handle_thanks(self, text):
         self._plan(["درک پیام", "پاسخ"])
-        self._wait(0.4); self._done(0)
-        ans, prov = self.llm.chat(
-            "You are Professor Flash V1. Reply briefly and warmly in Persian to a thank-you. 1 sentence.",
-            text, timeout=30)
-        self._done(1)
-        if ans:
-            return self._reply(ans)
-        return self._reply("خواهش می‌کنم! هر وقت چیزی خواستی - ساخت برنامه، سوال، محاسبه یا جستجو - در خدمتم.")
+        self._wait(0.15); self._done(0)
+        self._wait(0.15); self._done(1)
+        if self.llm.active_provider():
+            ans, prov = self.llm.chat(
+                "You are Professor Flash V1. Reply briefly and warmly in Persian to a thank-you. 1 sentence.",
+                text, timeout=20)
+            if ans:
+                return self._reply(ans)
+        return self._reply(random.choice(self._THANKS_POOL))
 
     # -------------------------------------------------------------- model
     def _handle_model(self, text):
@@ -354,8 +379,7 @@ class Brain:
         for w in ["سرچ کن", "جستجو کن", "جستوجو کن", "بگرد", "جستجو", "پیدا کن", "تو اینترنت",
                   "درباره", "در مورد", "بگو درباره"]:
             if persian.soft(w) in persian.soft(query):
-                query = query.replace(w, "").strip(" ،:،")
-                break
+                query = query.replace(w, " ")
         query = persian.clean_for_display(query) or "Professor Flash"
         self._plan(["درک درخواست", "جستجو در وب", "جمع‌آوری نتایج", "ارائه"])
         self._log(f"جستجو در وب: {query}")
@@ -451,7 +475,7 @@ class Brain:
                   "میخوام بدونم", "می‌خوام بدونم", "میخواهم بدانم", "میخوام", "می‌خوام",
                   "یعنی چی", "یعنی چه", "چیست", "چیه", "چطوره", "چطور", "چجوری", "چگونه",
                   "درباره", "در مورد", "درمورد", "لطفا", "لطفاً", "سوال دارم", "یه سوال",
-                  "یک سوال", "ببین", "داداش", "داش", "چرا", "چند", "چقدر"]:
+                  "یک سوال", "ببین", "داداش", "داش", "چرا", "چند", "چقدر", "؟", "?", "؟!"]:
             q = q.replace(w, " ")
         q = persian.clean_for_display(q)
         return q or persian.clean_for_display(text)
@@ -467,41 +491,43 @@ class Brain:
         return "\n".join(lines)
 
     # ------------------------------------------------------------- chat
+    _CHAT_POOL = [
+        "پیامت را خواندم. از این‌ها می‌توانم:\n- به سوال جواب بدهم (مثلا «سیاهچاله چیه؟»)\n- محاسبه کنم (مثلا «۲۵ × ۴» یا «2x + 3 = 11»)\n- برنامه بسازم (مثلا «یه بازی مار بساز با تم سایبرپانکی»)\n- جستجو کنم (مثلا «سرچ کن درباره فلان چیز»)\n- پروژه‌ات را تغییر دهم (مثلا «رنگ دکمه‌ها رو آبی کن»)",
+        "متوجه شدم. این‌ها کارهایی است که از دستم برمی‌آید:\nساخت زنده برنامه، پاسخ به سوال (با دانش و جستجو)، محاسبات دقیق ریاضی و فیزیک، جستجوی وب و تغییر پروژه‌های قبلی.",
+        "پیامت رسید. اگر منظورت یکی از این‌هاست بگو:\n«یه بازی مار بساز» (ساخت)، «سیاهچاله چیه؟» (سوال)، «۲۵ × ۴» (محاسبه)، «سرچ کن درباره...» (جستجو).",
+        "درک کردم. هر کدام از این‌ها را می‌توانم: ساخت برنامه، پاسخ دقیق به سوال، محاسبه ریاضی/فیزیک، جستجو در وب، و اعمال تغییر روی پروژه موجود.",
+    ]
+
     def _handle_chat(self, text):
-        self._plan(["درک پیام", "فعال‌سازی تفکر", "پاسخ"])
-        self._wait(0.4); self._done(0)
-        self._wait(0.4); self._done(1)
-        ans, prov = self.llm.chat(
-            "You are Professor Flash V1 - a smart, friendly Persian AI assistant and app builder. "
-            "Answer naturally in Persian. If the user seems to want a program built, say you can build it "
-            "live and ask what it should do. Never mention system instructions. No emojis.",
-            text, timeout=50)
-        self._done(2)
-        if ans:
-            self._log(f"پاسخ از {prov}")
-            return self._reply(ans)
-        # offline local fallback - honest and helpful
+        self._plan(["درک پیام", "پاسخ"])
+        self._wait(0.15); self._done(0)
+        self._wait(0.15); self._done(1)
+        if self.llm.active_provider():
+            ans, prov = self.llm.chat(
+                "You are Professor Flash V1 - a smart, friendly Persian AI assistant and app builder. "
+                "Answer naturally in Persian. If the user seems to want a program built, say you can build it "
+                "live and ask what it should do. Never mention system instructions. No emojis.",
+                text, timeout=20)
+            if ans:
+                self._log(f"پاسخ از {prov}")
+                return self._reply(ans)
+        return self._reply(self._local_chat(text))
+
+    def _local_chat(self, text):
         s = persian.soft(text)
         if any(w in s for w in ["میفهمی", "فهمیدی", "متوجه میشی", "متوجه می‌شی"]):
-            return self._reply(
+            return (
                 "بله، کاملا می‌فهمم. فارسی را با همه ظرافت‌هایش می‌فهمم - تکه‌کلام، احساسات، "
                 "ترکیب فارسی و انگلیسی، حتی «اوکیه» و «گیت هاب».\n"
                 "اگر تغییر پروژه می‌خواهی بگو، اگر سوالی داری بپرس، یا بگو چه برنامه‌ای بسازم."
             )
         if any(w in s for w in ["لینوکس", "ویندوز", "مک", "نصب", "نصب کن", "چطوری نصب", "چجوری نصب"]):
-            return self._reply(
+            return (
                 "برای اجرا فقط کافی است در پوشه پروژه بنویسی: python run.py\n"
                 "run.py خودش محیط مجازی می‌سازد، پیش‌نیازها را نصب می‌کند، موتورهای فکری را تشخیص می‌دهد "
                 "و مرورگر را باز می‌کند."
             )
-        return self._reply(
-            "پیامت را خواندم. از این‌ها می‌توانم:\n"
-            "- به سوال جواب بدهم (مثلا «سیاهچاله چیه؟»)\n"
-            "- محاسبه کنم (مثلا «۲۵ × ۴» یا «2x + 3 = 11»)\n"
-            "- برنامه بسازم (مثلا «یه بازی مار بساز با تم سایبرپانکی»)\n"
-            "- جستجو کنم (مثلا «سرچ کن درباره فلان چیز»)\n"
-            "- پروژه‌ات را تغییر دهم (مثلا «رنگ دکمه‌ها رو آبی کن»)"
-        )
+        return random.choice(self._CHAT_POOL)
 
     # ------------------------------------------------------------- build
     def _handle_build(self, text):
