@@ -273,145 +273,6 @@ def _page(title, body, image_block="", direction="rtl", lang="fa"):
 
 TEMPLATES = {}
 
-# ---------------------------------------------------------------- calculator
-TEMPLATES["calculator"] = {
-    "name_fa": "ماشین حساب",
-    "dir": "ltr",
-    "keywords": ["ماشین حساب", "محاسبه گر", "محاسبهگر", "calculator", "حسابگر", "ماشین‌حساب"],
-    "structure": [
-        {"selector": "#display", "name": "نمایشگر", "kind": "text"},
-        {"selector": ".btn", "name": "دکمه‌ها", "kind": "button"},
-        {"selector": ".btn.op", "name": "دکمه‌های عملگر", "kind": "button"},
-        {"selector": ".btn.eq", "name": "دکمه مساوی", "kind": "button"},
-        {"selector": "body", "name": "پس‌زمینه", "kind": "background"},
-        {"selector": ".app", "name": "محفظه برنامه", "kind": "container"},
-    ],
-    "html": lambda t, d, img: _page(
-        t, d, img,
-        """
-<main class="app" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px">
-  <div class="card calc" style="width:340px;max-width:100%;padding:18px">
-    <div style="text-align:center;font-weight:700;margin-bottom:12px;color:var(--accent)">""" + t + """</div>
-    <div class="display-wrap" style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;text-align:right">
-      <div id="expr" style="min-height:20px;color:var(--muted);font-family:var(--mono);font-size:.9rem;word-break:break-all"></div>
-      <div id="display" style="font-family:var(--mono);font-size:2rem;font-weight:700;word-break:break-all">0</div>
-    </div>
-    <div class="keys" style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px">
-      <button class="btn fn" style="background:var(--surface2);box-shadow:none" data-k="C">C</button>
-      <button class="btn fn" style="background:var(--surface2);box-shadow:none" data-k="%">%</button>
-      <button class="btn fn" style="background:var(--surface2);box-shadow:none" data-k="b">⌫</button>
-      <button class="btn op" data-k="/">÷</button>
-      <button class="btn" data-k="7">7</button>
-      <button class="btn" data-k="8">8</button>
-      <button class="btn" data-k="9">9</button>
-      <button class="btn op" data-k="*">×</button>
-      <button class="btn" data-k="4">4</button>
-      <button class="btn" data-k="5">5</button>
-      <button class="btn" data-k="6">6</button>
-      <button class="btn op" data-k="-">−</button>
-      <button class="btn" data-k="1">1</button>
-      <button class="btn" data-k="2">2</button>
-      <button class="btn" data-k="3">3</button>
-      <button class="btn op" data-k="+">+</button>
-      <button class="btn" data-k="0" style="grid-column:span 2">0</button>
-      <button class="btn" data-k=".">.</button>
-      <button class="btn eq" data-k="=" style="grid-row:span 2;background:var(--accent2)">=</button>
-    </div>
-  </div>
-</main>
-""",
-    ),
-    "css": lambda: SHARED_CSS,
-    "js": """
-(function () {
-  var display = document.getElementById('display');
-  var expr = document.getElementById('expr');
-  var current = '';
-  var operand = null;
-  var pendingOp = null;
-  var justEvaluated = false;
-
-  function render() {
-    display.textContent = current === '' ? '0' : current;
-  }
-  function pushExpr(txt) {
-    var prev = expr.textContent;
-    expr.textContent = prev.length > 26 ? txt : prev + ' ' + txt;
-  }
-  function compute(a, b, op) {
-    var x = parseFloat(a), y = parseFloat(b);
-    switch (op) {
-      case '+': return x + y;
-      case '-': return x - y;
-      case '*': return x * y;
-      case '/': return y === 0 ? NaN : x / y;
-      case '%': return x * (y / 100);
-    }
-    return y;
-  }
-  function inputDigit(d) {
-    if (justEvaluated) { current = ''; expr.textContent = ''; justEvaluated = false; }
-    if (d === '.' && current.indexOf('.') !== -1) return;
-    if (current.replace('.', '').length >= 15) return;
-    current += d;
-    render();
-  }
-  function inputOp(op) {
-    if (current === '' && operand !== null && pendingOp) { pendingOp = op; return; }
-    if (current !== '') {
-      if (operand !== null && pendingOp) {
-        var res = compute(operand, current, pendingOp);
-        if (isNaN(res)) { expr.textContent = 'خطا'; current = ''; operand = null; pendingOp = null; render(); return; }
-        operand = String(res);
-        expr.textContent = operand;
-      } else {
-        operand = current;
-        expr.textContent = operand;
-      }
-    }
-    pendingOp = op;
-    current = '';
-    justEvaluated = false;
-    render();
-  }
-  function evaluate() {
-    if (pendingOp !== null && current !== '' && operand !== null) {
-      var res = compute(operand, current, pendingOp);
-      if (isNaN(res)) { expr.textContent = 'خطا'; current = ''; operand = null; pendingOp = null; render(); return; }
-      expr.textContent = operand + ' ' + pendingOp + ' ' + current + ' =';
-      current = String(res);
-      operand = null; pendingOp = null;
-      justEvaluated = true;
-      render();
-    }
-  }
-  function clear() { current = ''; operand = null; pendingOp = null; expr.textContent = ''; justEvaluated = false; render(); }
-  function backspace() { if (justEvaluated) { clear(); return; } current = current.slice(0, -1); render(); }
-  function percent() { if (current !== '') { current = String(parseFloat(current) / 100); render(); } }
-
-  document.querySelectorAll('.keys .btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var k = btn.getAttribute('data-k');
-      if (k === 'C') clear();
-      else if (k === 'b') backspace();
-      else if (k === '%') percent();
-      else if (k === '=') evaluate();
-      else if ('+-*/'.indexOf(k) !== -1) inputOp(k);
-      else inputDigit(k);
-    });
-  });
-  document.addEventListener('keydown', function (e) {
-    var k = e.key;
-    if (/^[0-9.]$/.test(k)) inputDigit(k);
-    else if (k === '+' || k === '-' || k === '*' || k === '/') inputOp(k);
-    else if (k === 'Enter' || k === '=') { e.preventDefault(); evaluate(); }
-    else if (k === 'Backspace') backspace();
-    else if (k === 'Escape') clear();
-  });
-})();
-""",
-}
-
 # ------------------------------------------------------------------ todo list
 TEMPLATES["todo"] = {
     "name_fa": "لیست کارها",
@@ -1337,6 +1198,229 @@ TEMPLATES["tictactoe"] = {
 """,
 }
 
+# ------------------------------------------------------------------ notes
+TEMPLATES["notes"] = {
+    "name_fa": "یادداشت‌ها",
+    "dir": "rtl",
+    "keywords": ["یادداشت", "یادداشت‌ها", "دفترچه", "notepad", "notes", "یادداشت برداری"],
+    "structure": [
+        {"selector": "#note-title", "name": "عنوان یادداشت", "kind": "input"},
+        {"selector": "#note-body", "name": "متن یادداشت", "kind": "input"},
+        {"selector": ".note-item", "name": "فهرست یادداشت‌ها", "kind": "container"},
+        {"selector": "#save-btn", "name": "دکمه ذخیره", "kind": "button"},
+        {"selector": "body", "name": "پس‌زمینه", "kind": "background"},
+    ],
+    "html": lambda t, d, img: _page(
+        t, d, img,
+        """
+<main class="app" style="min-height:100vh;display:flex;justify-content:center;padding:24px 16px">
+  <div style="width:860px;max-width:100%;display:grid;grid-template-columns:240px 1fr;gap:16px">
+    <aside class="card" style="padding:14px;display:flex;flex-direction:column;gap:10px;max-height:70vh">
+      <button id="new-btn" class="btn primary" style="width:100%">یادداشت جدید</button>
+      <input id="search-note" type="text" placeholder="جستجو..." style="width:100%">
+      <ul id="note-list" style="list-style:none;overflow:auto;display:flex;flex-direction:column;gap:6px"></ul>
+    </aside>
+    <div class="card" style="padding:18px;display:flex;flex-direction:column;gap:14px">
+      <input id="note-title" type="text" placeholder="عنوان یادداشت..." style="width:100%;font-size:1.1rem;font-weight:700">
+      <textarea id="note-body" rows="14" placeholder="متن یادداشت را اینجا بنویس..." style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;font-family:inherit;resize:vertical;min-height:300px"></textarea>
+      <div style="display:flex;gap:10px">
+        <button id="save-btn" class="btn primary">ذخیره</button>
+        <button id="delete-btn" class="btn ghost">حذف</button>
+      </div>
+    </div>
+  </div>
+</main>
+""",
+    ),
+    "css": lambda: SHARED_CSS + """
+.note-item {
+  padding: 10px 12px; border-radius: 9px; cursor: pointer;
+  background: var(--surface2); border: 1px solid var(--border);
+  font-size: .88rem; transition: all .12s ease; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.note-item:hover { border-color: var(--accent); }
+.note-item.active { border-color: var(--accent); background: var(--glow); }
+@media (max-width: 640px) {
+  .app > div { grid-template-columns: 1fr !important; }
+  aside { max-height: 30vh !important; }
+}
+""",
+    "js": """
+(function () {
+  var KEY = 'pf-notes-v1';
+  var notes = [];
+  var currentId = null;
+  var listEl = document.getElementById('note-list');
+  var titleEl = document.getElementById('note-title');
+  var bodyEl = document.getElementById('note-body');
+  var searchEl = document.getElementById('search-note');
+
+  try { notes = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { notes = []; }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(notes)); } catch (e) {}
+  }
+
+  function render() {
+    var q = searchEl.value.trim();
+    listEl.innerHTML = '';
+    var shown = notes.filter(function (n) {
+      return !q || (n.title + ' ' + n.body).indexOf(q) !== -1;
+    });
+    if (!shown.length) {
+      var li = document.createElement('li');
+      li.textContent = 'یادداشتی نیست';
+      li.style.cssText = 'color:var(--muted);text-align:center;padding:10px';
+      listEl.appendChild(li);
+    }
+    shown.forEach(function (n) {
+      var li = document.createElement('li');
+      li.className = 'note-item' + (n.id === currentId ? ' active' : '');
+      li.textContent = n.title || 'بدون عنوان';
+      li.addEventListener('click', function () { openNote(n.id); });
+      listEl.appendChild(li);
+    });
+  }
+
+  function openNote(id) {
+    var n = notes.find(function (x) { return x.id === id; });
+    if (!n) return;
+    currentId = id;
+    titleEl.value = n.title;
+    bodyEl.value = n.body;
+    render();
+  }
+
+  function newNote() {
+    currentId = null;
+    titleEl.value = '';
+    bodyEl.value = '';
+    titleEl.focus();
+    render();
+  }
+
+  document.getElementById('new-btn').addEventListener('click', newNote);
+  document.getElementById('save-btn').addEventListener('click', function () {
+    var title = titleEl.value.trim();
+    var body = bodyEl.value.trim();
+    if (!title && !body) return;
+    if (currentId) {
+      var n = notes.find(function (x) { return x.id === currentId; });
+      if (n) { n.title = title; n.body = body; }
+    } else {
+      currentId = Date.now();
+      notes.unshift({ id: currentId, title: title, body: body, time: Date.now() });
+    }
+    save(); render();
+  });
+  document.getElementById('delete-btn').addEventListener('click', function () {
+    if (currentId === null) return;
+    notes = notes.filter(function (x) { return x.id !== currentId; });
+    save(); newNote();
+  });
+  searchEl.addEventListener('input', render);
+
+  if (notes.length) openNote(notes[0].id); else render();
+})();
+""",
+}
+
+# ------------------------------------------------------------------- paint
+TEMPLATES["paint"] = {
+    "name_fa": "بوم نقاشی",
+    "dir": "rtl",
+    "keywords": ["نقاشی", "بوم", "paint", "طراحی با موس", "نقاشی کشیدن", "نقاش"],
+    "structure": [
+        {"selector": "#canvas", "name": "بوم نقاشی", "kind": "container"},
+        {"selector": "#color", "name": "انتخاب رنگ", "kind": "input"},
+        {"selector": "#clear-btn", "name": "دکمه پاک کردن", "kind": "button"},
+        {"selector": "#save-btn", "name": "دکمه ذخیره تصویر", "kind": "button"},
+        {"selector": "body", "name": "پس‌زمینه", "kind": "background"},
+    ],
+    "html": lambda t, d, img: _page(
+        t, d, img,
+        """
+<main class="app" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px">
+  <div class="card" style="width:640px;max-width:100%">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <h1 style="font-size:1.4rem">""" + t + """</h1>
+      <span id="hint" style="color:var(--muted);font-size:.8rem">با موس یا لمس بکش</span>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:8px;font-size:.88rem">رنگ <input type="color" id="color" value="#00f0ff"></label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.88rem">ضخامت <input type="range" id="size" min="2" max="40" value="8" style="width:110px"></label>
+      <div style="display:flex;gap:8px;margin-inline-start:auto">
+        <button id="clear-btn" class="btn ghost">پاک کردن</button>
+        <button id="save-btn" class="btn primary">ذخیره تصویر</button>
+      </div>
+    </div>
+    <canvas id="canvas" width="600" height="420" style="width:100%;background:#fff;border-radius:12px;border:1px solid var(--border);touch-action:none;cursor:crosshair"></canvas>
+  </div>
+</main>
+""",
+    ),
+    "css": lambda: SHARED_CSS,
+    "js": """
+(function () {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var drawing = false;
+
+  function fit() {
+    var w = canvas.clientWidth;
+    if (w && w !== canvas.width) {
+      var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      canvas.width = w;
+      canvas.height = Math.round(w * 420 / 600);
+      ctx.putImageData(img, 0, 0);
+    }
+  }
+  fit();
+  window.addEventListener('resize', fit);
+
+  function pos(e) {
+    var rect = canvas.getBoundingClientRect();
+    var pt = e.touches ? e.touches[0] : e;
+    return {
+      x: (pt.clientX - rect.left) * canvas.width / rect.width,
+      y: (pt.clientY - rect.top) * canvas.height / rect.height
+    };
+  }
+
+  canvas.addEventListener('mousedown', function (e) { drawing = true; ctx.beginPath(); ctx.moveTo(pos(e).x, pos(e).y); });
+  canvas.addEventListener('mousemove', function (e) {
+    if (!drawing) return;
+    var p = pos(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = document.getElementById('color').value;
+    ctx.lineWidth = parseInt(document.getElementById('size').value, 10);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p.x, p.y);
+  });
+  window.addEventListener('mouseup', function () { drawing = false; });
+
+  canvas.addEventListener('touchstart', function (e) { e.preventDefault(); drawing = true; var p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }, { passive: false });
+  canvas.addEventListener('touchmove', function (e) { e.preventDefault(); if (!drawing) return; var p = pos(e); ctx.lineTo(p.x, p.y); ctx.strokeStyle = document.getElementById('color').value; ctx.lineWidth = parseInt(document.getElementById('size').value, 10); ctx.lineCap = 'round'; ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x, p.y); }, { passive: false });
+  canvas.addEventListener('touchend', function () { drawing = false; });
+
+  document.getElementById('clear-btn').addEventListener('click', function () {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  });
+  document.getElementById('save-btn').addEventListener('click', function () {
+    var a = document.createElement('a');
+    a.download = 'painting.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  });
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+})();
+""",
+}
+
 # --------------------------------------------------------------------- misc
 TEMPLATES["guess"] = {
     "name_fa": "بازی حدس عدد",
@@ -1415,8 +1499,8 @@ TEMPLATES["guess"] = {
 # --------------------------------------------------------------------------
 
 TYPE_ORDER = [
-    "calculator", "todo", "snake", "quiz", "guess", "tictactoe",
-    "clock", "stopwatch", "password", "converter", "landing",
+    "todo", "notes", "snake", "quiz", "guess", "tictactoe",
+    "clock", "stopwatch", "password", "converter", "paint", "landing",
 ]
 
 

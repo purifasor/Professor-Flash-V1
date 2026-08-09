@@ -56,16 +56,55 @@
     return out;
   }
 
+  var AVATARS = {
+    ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 L4.5 13.5 H11 L9.5 22 L19.5 9.5 H12.5 L13 2 Z"/></svg>',
+    user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>'
+  };
+
   function addMessage(role, text) {
     var wrap = document.createElement("div");
     wrap.className = "msg " + role;
+    var avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.innerHTML = AVATARS[role] || "";
     var bubble = document.createElement("div");
     bubble.className = "bubble";
     bubble.innerHTML = renderMarkdown(text);
+    wrap.appendChild(avatar);
     wrap.appendChild(bubble);
     els.chatLog.appendChild(wrap);
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
     return wrap;
+  }
+
+  function hideEmptyState() {
+    var es = document.getElementById("emptyState");
+    if (es) es.style.display = "none";
+  }
+
+  function setupSuggestions() {
+    var ideas = [
+      "یه بازی مار بساز با تم سایبرپانکی",
+      "یک سایت برای معرفی خودم بساز",
+      "یه بوم نقاشی بساز",
+      "لیست کار روزانه بساز",
+      "یه بازی حدس عدد بساز",
+      "سیاهچاله چیه ؟",
+      "۵ + ۷ × ۳",
+    ];
+    var box = document.getElementById("suggestions");
+    if (!box) return;
+    ideas.forEach(function (idea) {
+      var c = document.createElement("button");
+      c.className = "chip";
+      c.textContent = idea;
+      c.addEventListener("click", function () {
+        els.input.value = idea;
+        hideEmptyState();
+        send();
+      });
+      box.appendChild(c);
+    });
   }
 
   function addTyping() {
@@ -288,6 +327,7 @@
   function send() {
     var text = els.input.value.trim();
     if (!text || busy) return;
+    hideEmptyState();
     els.input.value = "";
     autoGrow();
     addMessage("user", text);
@@ -363,19 +403,11 @@
         if (m.node) {
           els.badgeText.textContent = "آفلاین · رایگان · Node آماده";
         }
-        var welcome;
-        if (m.currentProject) {
-          welcome =
-            "سلام! من Professor Flash V1 هستم؛ دستیار ساخت برنامه (آفلاین و رایگان).\n" +
-            "پروژه قبلی «" + m.currentProject.name + "» آماده است؛ می‌توانی آن را تغییر بدهی یا پروژه جدیدی بسازی.";
-          currentPreview = m.currentProject.preview;
-          openPreview(currentPreview, m.currentProject.name);
-        } else {
-          welcome =
-            "سلام! من Professor Flash V1 هستم؛ دستیار ساخت برنامه (آفلاین و رایگان).\n" +
-            "کافی است بگویی چه برنامه‌ای می‌خواهی؛ مثلا «یک ماشین حساب بساز» یا «یک بازی مار با تم سایبرپانکی بساز».";
-        }
+        var welcome =
+          "سلام! من Professor Flash V1 هستم؛ هوش مصنوعی آفلاین و رایگان که می‌فهمد، فکر می‌کند و برنامه می‌سازد.\n" +
+          "کافی است بگویی چه برنامه‌ای می‌خواهی؛ مثلا «یه بازی مار بساز»، «یک سایت بساز» یا هر سوالی بپرس.";
         addMessage("ai", welcome);
+        setupSuggestions();
       })
       .catch(function () {
         addMessage("ai", "سلام! من Professor Flash هستم. سرویس در حال راه‌اندازی است؛ کمی صبر کن.");
