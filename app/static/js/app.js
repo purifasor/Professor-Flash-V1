@@ -350,8 +350,14 @@ chatEl.addEventListener("click", async (e) => {
 /* ------------------------------------------------------------ sessions */
 async function loadSessions() {
   try {
-    const r = await fetch("/api/history");
-    const d = await r.json();
+    let r = await fetch("/api/history");
+    let d = await r.json();
+    // always make sure there is an active session so the chat is usable
+    if (!d.active) {
+      await fetch("/api/session/new", { method: "POST" });
+      r = await fetch("/api/history");
+      d = await r.json();
+    }
     state.sessionId = d.active;
     sessionsEl.innerHTML = "";
     (d.sessions || []).forEach((s) => {
