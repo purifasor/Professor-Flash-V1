@@ -14,6 +14,32 @@ function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/* Render message text: fenced code blocks (```) become styled <pre> blocks,
+   everything else stays as normal escaped text. */
+function renderContent(text) {
+  const parts = String(text).split(/```/);
+  if (parts.length === 1) return esc(text);
+  let html = "";
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (i % 2 === 0) {
+      if (p) html += esc(p);
+    } else {
+      let lang = "";
+      let code = p;
+      const nl = p.indexOf("\n");
+      const first = (nl === -1 ? p : p.slice(0, nl)).trim();
+      if (first && !/[<>{}()\s]/.test(first)) {
+        lang = first;
+        code = nl === -1 ? "" : p.slice(nl + 1);
+      }
+      html += (lang ? `<div class="code-label">${esc(lang)}</div>` : "");
+      html += `<pre class="code-block"><code>${esc(code)}</code></pre>`;
+    }
+  }
+  return html;
+}
+
 function timeAgo(ts) {
   const d = Date.now() / 1000 - ts;
   if (d < 60) return "لحظاتی پیش";
@@ -72,9 +98,10 @@ function addMessage(role, text, mid, animate) {
          <button class="act-del" title="حذف">${icon("trash")}</button>
        </div>`
     : "";
+  wrap.dataset.raw = String(text);
   wrap.innerHTML = `
     <div class="avatar">${role === "user" ? "شما" : "PF"}</div>
-    <div class="bubble">${esc(text)}${actions}</div>`;
+    <div class="bubble">${renderContent(text)}${actions}</div>`;
   chatEl.appendChild(wrap);
   if (animate !== false) scrollDown(role === "user");
   return wrap;
@@ -325,7 +352,7 @@ chatEl.addEventListener("click", async (e) => {
   if (!mid) return;
 
   if (e.target.closest(".act-copy")) {
-    const text = bubble.childNodes[0].textContent;
+    const text = wrap.dataset.raw || bubble.textContent;
     try {
       await navigator.clipboard.writeText(text);
     } catch (err) {
