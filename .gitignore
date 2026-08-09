@@ -6,4 +6,5 @@ dist/
 .freebuff/
 memory.json
 projects/
+Learned/
 *.log

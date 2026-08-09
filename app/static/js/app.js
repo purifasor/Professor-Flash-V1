@@ -34,7 +34,6 @@ function icon(name) {
 /* ----------------------------------------------------------- elements */
 const chatEl = $("chat");
 const heroEl = $("hero");
-const logsEl = $("logs");
 const todosEl = $("todos");
 const filesEl = $("files");
 const sessionsEl = $("sessions");
@@ -161,25 +160,6 @@ function renderTodos(todos) {
   });
 }
 
-function renderLogs(logs) {
-  if (!logs || !logs.length) {
-    logsEl.innerHTML = '<div class="empty">گزارش فعالیت‌ها اینجا نمایش داده می‌شود.</div>';
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  logs.forEach((l) => {
-    const el = document.createElement("div");
-    el.className = "log " + (l.level === "error" ? "err" : l.level === "skip" ? "skip" : "");
-    const t = new Date(l.time * 1000);
-    const ts = String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
-    el.innerHTML = `<span class="t">${ts}</span>${esc(l.text)}`;
-    frag.appendChild(el);
-  });
-  logsEl.innerHTML = "";
-  logsEl.appendChild(frag);
-  logsEl.scrollTop = logsEl.scrollHeight;
-}
-
 function renderFiles(files) {
   filesEl.innerHTML = "";
   if (!files || !files.length) {
@@ -203,7 +183,6 @@ async function pollTask(tid) {
 
     setTaskStatus(t.status);
     if (t.todos) renderTodos(t.todos);
-    if (t.logs) renderLogs(t.logs);
     if (t.files) renderFiles(t.files);
 
     if (t.status === "running" || t.status === "queued" || t.status === "paused") {
@@ -264,7 +243,6 @@ async function send(text) {
   heroEl.classList.remove("show");
   thinkingBubble();
   renderTodos([]);
-  renderLogs([]);
   renderFiles([]);
   setTaskStatus("running");
 
@@ -448,7 +426,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
     tab.classList.add("active");
-    ["logs", "todos", "files"].forEach((k) => {
+    ["todos", "files"].forEach((k) => {
       $("tab-" + k).hidden = k !== tab.dataset.tab;
     });
   });
@@ -456,13 +434,13 @@ document.querySelectorAll(".tab").forEach((tab) => {
 
 /* -------------------------------------------------------------- chips */
 const SUGGESTIONS = [
-  "یه بازی مار بساز با تم سایبرپانکی",
-  "یک سایت معرفی آب و هوا بساز",
+  "یه برنامه پایتون بنویس که ۴ عدد رو ضرب کنه",
+  "یک کد پایتون بنویس که پیام سلام چاپ کنه",
+  "یه برنامه پایتون بنویس که فاکتوریل حساب کنه",
   "سیاهچاله چیه؟",
   "۲۵ × ۴ + ۱۰۰",
   "2x + 3 = 11 چنده؟",
   "نیرو با جرم ۵ و شتاب ۲ چقدره؟",
-  "سرچ کن درباره تلسکوپ جیمز وب",
 ];
 
 function renderChips() {

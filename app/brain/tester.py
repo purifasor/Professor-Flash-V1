@@ -94,22 +94,74 @@ def _check_css(path):
     return True, "ساختار CSS سالم است"
 
 
+def _inline_scripts(html):
+    parts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+    return "\n".join(parts)
+
+
+def _check_inline_js(js, use_node=True):
+    """Validate the inline <script> of a single-file page (real node check)."""
+    if use_node and js.strip():
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".js")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(js)
+            ok, err = _run_node_check(tmp)
+            if ok:
+                return True, "نحو صحیح است (Node - داخل index.html)"
+            return False, err or "خطای نحو"
+        finally:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+    return True, "اسکریپت داخل index.html"
+
+
 def test_project(root: str, use_node=True):
-    """Test a generated project. Returns list of per-file results + overall."""
+    """Test a generated project. Returns list of per-file results + overall.
+
+    Single-file pages (everything inline in index.html) are valid too:
+    missing style.css/app.js are accepted when the page carries its own
+    <style> / <script> blocks, and inline JS is still really checked with
+    node --check when Node is available.
+    """
     results = []
     overall = True
+    html_path = os.path.join(root, "index.html")
+    html = ""
+    if os.path.exists(html_path):
+        with open(html_path, "r", encoding="utf-8") as f:
+            html = f.read()
     for fname in ["index.html", "style.css", "app.js"]:
         p = os.path.join(root, fname)
-        if not os.path.exists(p):
-            results.append({"file": fname, "ok": False, "detail": "فایل وجود ندارد"})
-            overall = False
-            continue
         if fname == "index.html":
+            if not os.path.exists(p):
+                results.append({"file": fname, "ok": False, "detail": "فایل وجود ندارد"})
+                overall = False
+                continue
             ok, detail = _check_html(p)
         elif fname == "style.css":
+            if not os.path.exists(p):
+                if "<style" in html:
+                    results.append({"file": fname, "ok": True, "detail": "استایل داخل index.html تعریف شده"})
+                    continue
+                results.append({"file": fname, "ok": False, "detail": "فایل وجود ندارد"})
+                overall = False
+                continue
             ok, detail = _check_css(p)
-        else:
-            ok, detail = _check_js(p, use_node=use_node)
+        else:  # app.js
+            if not os.path.exists(p):
+                inline = _inline_scripts(html)
+                if inline.strip():
+                    ok, detail = _check_inline_js(inline, use_node=use_node)
+                else:
+                    results.append({"file": fname, "ok": False, "detail": "فایل وجود ندارد"})
+                    overall = False
+                    continue
+            else:
+                ok, detail = _check_js(p, use_node=use_node)
         results.append({"file": fname, "ok": ok, "detail": detail})
         if not ok:
             overall = False

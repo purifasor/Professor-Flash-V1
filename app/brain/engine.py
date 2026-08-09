@@ -17,8 +17,12 @@ import json
 import os
 import random
 import re
+import subprocess
+import sys
 import time
 import uuid
+
+from . import local_code
 
 from . import calc
 from . import knowledge
@@ -51,6 +55,8 @@ FIX_WORDS = ["ارور", "خطا", "خراب", "درستش کن", "رفع کن",
 STRONG_BUILD = ["بساز", "بسازید", "بسازم", "بسازیم", "بسازش", "بسازی", "ساخت", "ساختن", "ساخته بشه",
                 "ایجاد کن", "بنا کن", "کدنویسی کن", "برنامه نویسی کن", "برام بساز", "برام درست کن",
                 "بنویس", "نویس", "طراحی کن", "یه برنامه", "یک برنامه", "برنامه ای", "برنامه‌ای"]
+CODE_REQ = ["کد بنویس", "کد بزن", "کد بنویسه", "یه کد", "یک کد", "کدی بنویس", "برنامه بنویس",
+            "برنامه بزن", "اسکریپت", "کد تولید", "برام کد", "کد برام", "نویسه", "نویس برام"]
 MODIFY_WORDS = ["تغییر بده", "تغییر بدهش", "تغییر", "عوض کن", "رنگ", "تم رو", "بزرگتر", "کوچیکتر",
                 "کوچکتر", "اضافه کن", "حذف کن", "زیباتر", "قشنگ", "سایبرپانک", "سایبرپانکی", "نئون",
                 "فونت", "عنوان", "تیتر", "اسمش", "دکمه", "پس زمینه", "پس‌زمینه", "هدر", "عکس",
@@ -148,6 +154,14 @@ class Brain:
         prepared = self._prepare_math(text)
         if prepared and calc.solve(prepared):
             return "math"
+
+        # code requests («کد بنویس»، «برنامه پایتون») always go to build,
+        # except «چجوری ... بنویسم؟» which is a genuine question
+        if self._score(text, CODE_REQ) > 0:
+            if self._score(text, ["بنویسم", "بسازم", "بزنم"]) > 0 and \
+                    self._score(text, ["چجوری", "چطوری", "چطور", "چگونه"]) > 0:
+                return "question"
+            return "build"
 
         has_q = self._score(text, QUESTION_WORDS) > 0 or self._has_word(text, "چی")
         has_build = self._score(text, STRONG_BUILD) > 0 or self._score(text, TYPE_HINTS) > 0
@@ -532,6 +546,113 @@ class Brain:
     # ------------------------------------------------------------- build
     def _handle_build(self, text):
         spec = self._build_spec(text)
+        if local_code.wants_python(text):
+            return self._build_python(text, spec)
+        return self._build_web(text, spec)
+
+    # ----------------------------------------------------- python build
+    def _build_python(self, text, spec):
+        self._log(f"درخواست ساخت پایتون: {spec['description'][:90]}")
+        self._plan(["تحلیل درخواست", "طراحی برنامه (مدل فکری/محلی)", "نوشتن main.py", "اجرای تست با ورودی نمونه", "تحویل کد و خروجی"])
+        self._done(0)
+        self._wait(0.3)
+
+        files, plan, prov = None, [], None
+        if self.llm.active_provider():
+            self._log("فعال‌سازی مدل فکری برای طراحی پایتون...")
+            files, plan, prov = self.llm.generate_project(spec, timeout=120, kind="python")
+        local = None
+        if not files:
+            self._log("تولید کد پایتون با هسته محلی...")
+            local = local_code.generate_python(text)
+            if local:
+                files, plan, prov = local["files"], local["plan"], "هسته محلی"
+        if not files:
+            self._done(1)
+            return self._reply(
+                "نتوانستم این برنامه پایتون را تولید کنم. دقیق‌تر بنویس؛ مثلا «یک کد پایتون بنویس که ۴ عدد را ضرب کند»."
+            )
+        self._log(f"طراحی توسط {prov} انجام شد")
+        self._done(1)
+        self._wait(0.2)
+
+        name = local["name"] if local else f"python-{uuid.uuid4().hex[:5]}"
+        root = os.path.join(self.projects_root, name)
+        os.makedirs(root, exist_ok=True)
+        code = files.get("main.py", "")
+        if not code:
+            return self._reply("کد تولیدشده خالی بود؛ دوباره تلاش کن.")
+        with open(os.path.join(root, "main.py"), "w", encoding="utf-8") as f:
+            f.write(code)
+        self.emit("file", {"path": "main.py", "size": len(code.encode("utf-8"))})
+        self._done(2)
+        self._wait(0.2)
+
+        # real test: compile + run with sample input, capture real output
+        test_input = local["test_input"] if local else ""
+        ok, output, err = self._run_python(os.path.join(root, "main.py"), test_input)
+        self._log(f"اجرای تست: {'موفق' if ok else 'خطا'}")
+        if err:
+            self._log(err[:200], "error")
+        self._done(3)
+        self._wait(0.2)
+        self._done(4)
+
+        pid = uuid.uuid4().hex[:10]
+        descriptor = {
+            "id": pid, "name": name, "root": root,
+            "files": [{"path": "main.py", "size": len(code.encode("utf-8"))}],
+            "meta": {"type": "برنامه پایتون", "type_key": "python", "theme": spec["theme"],
+                     "accent": spec["accent"], "description": spec["description"]},
+        }
+        try:
+            with open(os.path.join(root, "meta.json"), "w", encoding="utf-8") as f:
+                json.dump({"id": pid, "name": name, "type_fa": "برنامه پایتون", "created": time.time()},
+                          f, ensure_ascii=False, indent=1)
+        except Exception:
+            pass
+        self.memory.set_current_project(descriptor)
+        try:
+            self.learn.learn("ساخت پایتون", text,
+                             f"برنامه پایتون «{name}» ({local['summary'] if local else spec['description'][:60]}) با موتور {prov} ساخته و اجرا شد.",
+                             source="build")
+        except Exception:
+            pass
+
+        lines = [
+            f"برنامه پایتون «{name}» ساخته و اجرا شد.",
+            "",
+            "کد (main.py):",
+            "```python",
+            code.strip(),
+            "```",
+        ]
+        lines.append("")
+        if ok:
+            lines.append("تست: کامپایل و اجرا موفق بود.")
+            if output.strip():
+                lines += ["", "خروجی واقعی برنامه:", "```", output.strip()[:400], "```"]
+        else:
+            lines.append("تست: در اجرا خطا بود.")
+            if err:
+                lines += ["", "خطا:", "```", err[:300], "```"]
+        lines += ["", f"محل ذخیره: {root}", "", "می‌توانی همین برنامه را بخواهی تغییر بدهم."]
+        return self._reply("\n".join(lines), project=descriptor["id"], root=root)
+
+    def _run_python(self, path, test_input=""):
+        """Run a python file with sample stdin. Returns (ok, stdout, stderr)."""
+        try:
+            r = subprocess.run(
+                [sys.executable, path], input=test_input, capture_output=True, text=True,
+                timeout=20, encoding="utf-8", errors="replace")
+            return r.returncode == 0, r.stdout or "", (r.stderr or "")
+        except subprocess.TimeoutExpired:
+            return False, "", "زمان اجرا تمام شد"
+        except Exception as e:
+            return False, "", str(e)
+
+    # -------------------------------------------------------- web build
+    def _build_web(self, text, spec):
         self._log(f"درخواست ساخت: {spec['description'][:80]} | تم: {THEMES[spec['theme']]['name_fa']}")
 
         plan_steps = [
@@ -546,24 +667,30 @@ class Brain:
         plan_steps += ["تست و اعتبارسنجی", "تحویل پروژه"]
         self._plan(plan_steps)
         self._done(0)
-        self._wait(0.5)
+        self._wait(0.4)
 
         # the model really thinks: design plan
         self._log("فعال‌سازی مدل فکری برای طراحی...")
-        self._wait(0.4)
+        self._wait(0.3)
         files, plan, prov = self.llm.generate_project(spec, timeout=180)
+        local = None
+        if not files:
+            self._log("تولید صفحه وب با هسته محلی...")
+            local = local_code.generate_web(text)
+            if local:
+                files, plan, prov = local["files"], local["plan"], "هسته محلی"
         if not files:
             self._log("مدل فکری نتوانست کد تولید کند", "error")
             return self._reply(
-                "موتور تفکر پاسخ کامل نداد (ممکن است اینترنت ضعیف باشد). دوباره تلاش کن، "
-                "یا از این گزینه‌ها استفاده کن: پاسخ به سوال، محاسبه، جستجو."
+                "نتوانستم برنامه را تولید کنم. دقیق‌تر بنویس (مثلا «یه بازی مار بساز»)؛ "
+                "یا اگر درخواست پایتون است، کلمه «پایتون» را بنویس."
             )
         self._log(f"طراحی توسط {prov} انجام شد")
         for i, p in enumerate(plan, 1):
             self._log(f"گام {i}: {p}")
 
         self._done(1)
-        self._wait(0.3)
+        self._wait(0.2)
 
         # write files
         pid = uuid.uuid4().hex[:10]
@@ -597,7 +724,6 @@ class Brain:
             if saved:
                 self.emit("file", {"path": "assets/hero.png", "size": os.path.getsize(img_path)})
                 self._log("تصویر دانلود شد و در هدر قرار گرفت")
-                # make sure the html references it
                 html_path = os.path.join(root, "index.html")
                 with open(html_path, "r", encoding="utf-8") as f:
                     html = f.read()
@@ -614,7 +740,7 @@ class Brain:
         if spec.get("image_subject"):
             self._done(5)
             file_done = 5
-        self._wait(0.3)
+        self._wait(0.2)
 
         # test
         self._log("تست پروژه...")
@@ -625,10 +751,10 @@ class Brain:
             self._log(f"{r['file']}: {mark} - {r['detail']}")
 
         # fix pass with the LLM when something is broken
-        if not ok:
+        if not ok and prov != "هسته محلی":
             self._log("خطا پیدا شد؛ مدل فکری در حال رفع آن...")
             error_text = "\n".join(f"{r['file']}: {r['detail']}" for r in results if not r["ok"])
-            new_files, _prov = self.llm.fix_project(spec, files, error_text, timeout=180)
+            new_files, _prov = self.llm.fix_project(spec, files, error_text, timeout=120)
             if new_files:
                 for fname, content in new_files.items():
                     if fname in ("index.html", "style.css", "app.js"):
@@ -639,7 +765,7 @@ class Brain:
                     mark = "تأیید" if r["ok"] else "خطا"
                     self._log(f"{r['file']}: {mark} - {r['detail']}")
         self._done(file_done + 1)
-        self._wait(0.3)
+        self._wait(0.2)
         self._done(file_done + 2)
 
         descriptor = {
@@ -659,13 +785,10 @@ class Brain:
             pass
         self.memory.set_current_project(descriptor)
 
-        # passive learning: remember the build technique
         try:
             self.learn.learn(
-                "ساخت " + spec["type_fa"],
-                text,
-                f"پروژه «{spec['name']}» ({spec['type_fa']}، تم {THEMES[spec['theme']]['name_fa']}) با موتور {prov} ساخته شد. "
-                f"فایل‌ها: index.html, style.css, app.js. تست: {'سالم' if ok else 'دارای خطا'}.",
+                "ساخت " + spec["type_fa"], text,
+                f"پروژه «{spec['name']}» ({spec['type_fa']}، تم {THEMES[spec['theme']]['name_fa']}) با موتور {prov} ساخته شد. تست: {'سالم' if ok else 'دارای خطا'}.",
                 source="build",
             )
         except Exception:
@@ -682,15 +805,15 @@ class Brain:
             has_img = os.path.exists(os.path.join(root, "assets", "hero.png"))
             lines.append(f"- تصویر: {'دانلود و اضافه شد' if has_img else 'خواسته شد اما در دسترس نبود (رد شد)'}")
         lines.append(f"- فایل‌ها: {', '.join(written)}")
-        lines.append(f"- تست: {'تأیید شد' if ok else 'خطا در برخی فایل‌ها (جزئیات در گزارش)'}")
+        lines.append(f"- تست: {'تأیید شد' if ok else 'خطا در برخی فایل‌ها'}")
         lines.append("")
         lines.append(f"محل ذخیره: {root}")
         lines.append("")
-        lines.append("برنامه ساخت (توسط مدل فکری):")
+        lines.append("برنامه ساخت (توسط " + prov + "):")
         for i, p in enumerate(plan, 1):
             lines.append(f"{i}. {p}")
         lines.append("")
-        lines.append("اگر تغییری می‌خواهی بگو؛ مثلا «رنگ دکمه‌ها را قرمز کن» یا «یه بخش جدید اضافه کن».")
+        lines.append("اگر تغییری می‌خواهی بگو؛ مثلا «رنگ دکمه‌ها را قرمز کن».")
 
         return self._reply("\n".join(lines), project=descriptor["id"], root=root)
 
