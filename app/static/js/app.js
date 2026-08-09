@@ -79,13 +79,12 @@ function icon(name) {
 /* ----------------------------------------------------------- elements */
 const chatEl = $("chat");
 const heroEl = $("hero");
-const todosEl = $("todos");
-const filesEl = $("files");
 const sessionsEl = $("sessions");
 const inputEl = $("input");
 const controlsEl = $("controls");
 const taskStateEl = $("taskState");
 const taskStatusEl = $("taskStatus");
+const cmdEl = $("cmd");
 
 /* -------------------------------------------------------------- model */
 async function loadModel() {
@@ -112,18 +111,37 @@ function addMessage(role, text, mid, animate) {
   wrap.className = "msg " + (role === "user" ? "user" : "bot");
   wrap.dataset.mid = mid || "";
   const actions = mid
-    ? `<div class="actions">
-         <button class="act-copy" title="کپی">${icon("copy")}</button>
-         <button class="act-del" title="حذف">${icon("trash")}</button>
-       </div>`
+    ? `<button class="act-copy" title="کپی پیام">${icon("copy")}</button>`
     : "";
   wrap.dataset.raw = String(text);
   wrap.innerHTML = `
     <div class="avatar">${role === "user" ? "شما" : "PF"}</div>
-    <div class="bubble">${renderContent(text)}${actions}</div>`;
+    <div class="bubble">${renderContent(text)}</div>
+    <div class="msg-side">${actions}</div>`;
   chatEl.appendChild(wrap);
   if (animate !== false) scrollDown(role === "user");
   return wrap;
+}
+
+/* live todo checklist in the chat (ticked off as tasks complete) */
+let todoLiveEl = null;
+function setTodoLive(todos) {
+  if (!todoLiveEl) {
+    todoLiveEl = document.createElement("div");
+    todoLiveEl.className = "msg bot";
+    todoLiveEl.innerHTML = `<div class="avatar">PF</div><div class="bubble todo-live"></div>`;
+    chatEl.appendChild(todoLiveEl);
+  }
+  const box = todoLiveEl.querySelector(".todo-live");
+  box.innerHTML = `<div class="todo-title">برنامه کار:</div>` +
+    todos.map((t, i) =>
+      `<div class="todo-row ${t.done ? "done" : ""}" data-i="${i}"><span class="tick">${icon("check")}</span><span>${esc(t.text)}</span></div>`
+    ).join("");
+  scrollDown();
+}
+
+function clearTodoLive() {
+  if (todoLiveEl) { todoLiveEl.remove(); todoLiveEl = null; }
 }
 
 function addNote(text) {
@@ -142,8 +160,8 @@ function thinkingBubble() {
   wrap.innerHTML = `
     <div class="avatar">PF</div>
     <div class="bubble thinking">
-      <div class="dots"><span></span><span></span><span></span></div>
-      <span class="think-text">در حال فکر کردن...</span>
+      <div class="spinner"></div>
+      <span class="think-text">در حال تفکر...</span>
     </div>`;
   chatEl.appendChild(wrap);
   scrollDown();
@@ -199,33 +217,27 @@ function setTaskStatus(status) {
      status === "error" ? "err" : status === "queued" || status === "paused" ? "queued" : "");
 }
 
-function renderTodos(todos) {
-  todosEl.innerHTML = "";
-  if (!todos || !todos.length) {
-    todosEl.innerHTML = '<div class="empty">هنوز وظیفه‌ای تعریف نشده است.</div>';
-    return;
-  }
-  const firstUndone = todos.findIndex((t) => !t.done);
-  todos.forEach((t, i) => {
-    const el = document.createElement("div");
-    el.className = "todo" + (t.done ? " done" : "") + (i === firstUndone ? " now" : "");
-    el.innerHTML = `<div class="check">${icon("check")}</div><div>${esc(t.text)}</div>`;
-    todosEl.appendChild(el);
-  });
+/* CMD console - shows what the agent is doing, errors and problems.
+   Each task has its own log array, so a per-task counter tracks how many
+   lines of THIS task were already rendered (not the DOM count). */
+let cmdRendered = 0;
+function cmdLine(text, cls) {
+  const el = document.createElement("div");
+  el.className = "cmd-line " + (cls || "");
+  el.innerHTML = `<span class="cmd-prompt">PF&gt;</span> ${esc(text)}`;
+  cmdEl.appendChild(el);
+  cmdEl.scrollTop = cmdEl.scrollHeight;
+  return el;
 }
 
-function renderFiles(files) {
-  filesEl.innerHTML = "";
-  if (!files || !files.length) {
-    filesEl.innerHTML = '<div class="empty">فایل‌های ساخته‌شده اینجا نمایش داده می‌شوند.</div>';
-    return;
+function renderLogs(logs) {
+  if (!logs) return;
+  for (let i = cmdRendered; i < logs.length; i++) {
+    const l = logs[i];
+    const time = l.time ? new Date(l.time * 1000).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " " : "";
+    cmdLine(time + l.text, l.level === "error" ? "err" : l.level === "skip" ? "skip" : "");
+    cmdRendered = i + 1;
   }
-  files.forEach((f) => {
-    const el = document.createElement("div");
-    el.className = "file";
-    el.innerHTML = `<span class="fname">${esc(f.path)}</span><span class="fsize">${Number(f.size).toLocaleString("fa-IR")} B</span>`;
-    filesEl.appendChild(el);
-  });
 }
 
 /* ------------------------------------------------------------- polling */
@@ -236,15 +248,12 @@ async function pollTask(tid) {
     if (r.status !== 200) return stopPolling();
 
     setTaskStatus(t.status);
-    if (t.todos) renderTodos(t.todos);
-    if (t.files) renderFiles(t.files);
+    renderLogs(t.logs);
 
-    // announce the work plan as a chat message the first time a build task
-    // shows its Todo list (like other AI agents do before creating files)
-    if (t.todos && t.todos.length && !state.todoShown && state.taskId === tid) {
+    // live todo checklist in the chat (ticked off as steps complete)
+    if (t.todos && t.todos.length && state.taskId === tid) {
       state.todoShown = true;
-      const list = t.todos.map((x, i) => `${i + 1}. ${x.text}`).join("\n");
-      addNote("برنامه کار:\n" + list);
+      setTodoLive(t.todos);
     }
 
     if (t.status === "running" || t.status === "queued" || t.status === "paused") {
@@ -273,7 +282,7 @@ async function pollTask(tid) {
     }
     if (t.reply) addMessage("assistant", t.reply, null);
     loadModel(); // refresh brain badge + learned count
-    loadSessions(); // refresh sidebar counts
+    refreshSessions(); // refresh sidebar counts (keeps the chat DOM intact)
   } catch (e) {
     stopPolling();
   }
@@ -302,12 +311,12 @@ async function send(text) {
   state.busy = true;
   state.todoShown = false;
   thinkTick = 0;
+  cmdRendered = 0;
 
   addMessage("user", text, null);
   heroEl.classList.remove("show");
   thinkingBubble();
-  renderTodos([]);
-  renderFiles([]);
+  clearTodoLive();
   setTaskStatus("running");
 
   try {
@@ -335,7 +344,9 @@ async function send(text) {
     }
     state.taskId = data.taskId;
     pollTask(data.taskId);
-    loadSessions();
+    // no loadSessions() here - it would re-render the chat from history and
+    // wipe the live todo checklist. pollTask() refreshes the sidebar when
+    // the task finishes.
   } catch (e) {
     removeThinking();
     addNote("اتصال به سرور برقرار نشد.");
@@ -402,45 +413,44 @@ chatEl.addEventListener("click", async (e) => {
     addNote("کپی شد.");
     return;
   }
-  if (e.target.closest(".act-del")) {
-    try {
-      await fetch(`/api/history/${state.sessionId}/messages/${mid}/delete`, { method: "POST" });
-    } catch (err) { /* ignore */ }
-    wrap.remove();
-  }
 });
 
 /* ------------------------------------------------------------ sessions */
 async function loadSessions() {
   try {
-    let r = await fetch("/api/history");
-    let d = await r.json();
-    // always make sure there is an active session so the chat is usable
-    if (!d.active) {
-      await fetch("/api/session/new", { method: "POST" });
-      r = await fetch("/api/history");
-      d = await r.json();
-    }
-    state.sessionId = d.active;
-    sessionsEl.innerHTML = "";
-    (d.sessions || []).forEach((s) => {
-      const el = document.createElement("div");
-      el.className = "session" + (s.active ? " active" : "");
-      el.innerHTML = `
-        <div class="session-title">${esc(s.title)}</div>
-        <div class="session-meta">${s.count} پیام · ${timeAgo(s.updated)}</div>
-        <button class="session-del" title="حذف گفتگو">${icon("trash")}</button>`;
-      el.addEventListener("click", (ev) => {
-        if (ev.target.closest(".session-del")) {
-          deleteSession(s.id, el);
-          return;
-        }
-        switchSession(s.id);
-      });
-      sessionsEl.appendChild(el);
-    });
-    if (d.active) await loadMessages(d.active);
+    await refreshSessions();
+    if (state.sessionId) await loadMessages(state.sessionId);
   } catch (e) { /* offline */ }
+}
+
+/* refresh only the sidebar list - never touches the chat DOM, so the live
+   todo checklist survives task completion */
+async function refreshSessions() {
+  let r = await fetch("/api/history");
+  let d = await r.json();
+  if (!d.active) {
+    await fetch("/api/session/new", { method: "POST" });
+    r = await fetch("/api/history");
+    d = await r.json();
+  }
+  state.sessionId = d.active;
+  sessionsEl.innerHTML = "";
+  (d.sessions || []).forEach((s) => {
+    const el = document.createElement("div");
+    el.className = "session" + (s.active ? " active" : "");
+    el.innerHTML = `
+      <div class="session-title">${esc(s.title)}</div>
+      <div class="session-meta">${s.count} پیام · ${timeAgo(s.updated)}</div>
+      <button class="session-del" title="حذف گفتگو">${icon("trash")}</button>`;
+    el.addEventListener("click", (ev) => {
+      if (ev.target.closest(".session-del")) {
+        deleteSession(s.id, el);
+        return;
+      }
+      switchSession(s.id);
+    });
+    sessionsEl.appendChild(el);
+  });
 }
 
 async function switchSession(sid) {
@@ -464,8 +474,8 @@ $("btnNewSession").addEventListener("click", async () => {
   state.todoShown = false;
   chatEl.innerHTML = "";
   heroEl.classList.add("show");
-  renderTodos([]);
-  renderFiles([]);
+  clearTodoLive();
+  cmdEl.innerHTML = '<div class="cmd-line boot"><span class="cmd-prompt">PF&gt;</span> Professor Flash V1 — PRF ready. Type anything.</div>';
   setTaskStatus(null);
   await loadSessions();
 });
@@ -483,17 +493,6 @@ async function loadMessages(sid) {
     scrollDown();
   } catch (e) { /* offline */ }
 }
-
-/* ---------------------------------------------------------------- tabs */
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    tab.classList.add("active");
-    ["todos", "files"].forEach((k) => {
-      $("tab-" + k).hidden = k !== tab.dataset.tab;
-    });
-  });
-});
 
 /* -------------------------------------------------------------- chips */
 const SUGGESTIONS = [
@@ -521,5 +520,11 @@ function renderChips() {
 (async function init() {
   renderChips();
   await loadModel();
+  // always open a fresh session (new tab) when the app loads
+  try {
+    const r = await fetch("/api/session/new", { method: "POST" });
+    const d = await r.json();
+    state.sessionId = d.sessionId;
+  } catch (e) { /* offline */ }
   await loadSessions();
 })();

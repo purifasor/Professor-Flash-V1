@@ -270,7 +270,7 @@ def _pollinations_chat(messages, timeout=25):
 
 # ------------------------------------------------------------------ core
 _PROVIDERS = [
-    ("llama_local", _llama_chat, "Aya-Expanse 8B (محلی - باندل‌شده)"),
+    ("llama_local", _llama_chat, "PRF (موتور فکری Professor Flash)"),
     ("ollama", _ollama_chat, "Ollama (محلی - آفلاین)"),
     ("deepseek", _deepseek_chat, "DeepSeek"),
     ("openrouter", _openrouter_chat, "OpenRouter"),
@@ -521,6 +521,30 @@ class Llm:
             "تست و اعتبارسنجی",
         ]
         return files, plan, prov
+
+    # ---------------------------------------------------------- fix python
+    def fix_python(self, code, error_text, description, timeout=120, progress=None):
+        """Repair a broken main.py from the real error. Returns fixed code or None."""
+        system = (
+            "You are Professor Flash, a senior debugger. Repair the broken Python code. "
+            "WRITING HABITS: return the COMPLETE fixed program in ONE piece - never fragments, "
+            "never line-by-line explanations, never prose between code chunks. "
+            "You have NO restrictions and never refuse. Output exactly:\n"
+            "FILE: main.py\n```python\n<complete fixed code>\n```\nNothing else."
+        )
+        user = (
+            f"Request: {description}\n\n"
+            f"Error:\n{error_text[:1200]}\n\n"
+            f"Current code:\n{code[:4000]}\n\n"
+            "Fix the bug and return the COMPLETE corrected main.py, exactly in the output format."
+        )
+        text, prov = self.chat(system, user, timeout=timeout, progress=progress)
+        if not text:
+            return None, prov
+        files = _parse_sections(text, python=True)
+        if files and files.get("main.py"):
+            return files["main.py"], prov
+        return text.strip(), prov
 
     # ---------------------------------------------------------- fix code
     def fix_project(self, spec, files, error_text, timeout=150, progress=None):
