@@ -28,17 +28,24 @@ HOST = "127.0.0.1"
 PORT = 8585
 
 BANNER = r"""
-╔══════════════════════════════════════════════════════════╗
-║                                                          ║
-║     ╔═╗╔═╗╔═╗ ╔╦╗╔═╗╔═╗╔╦╗  ╦  ╦╔═╗╦╔╦╗╔═╗╦═╗           ║
-║     ║  ╠╣ ║╣   ║ ║╣ ║╣  ║   ║  ║║  ║ ║ ╠═╣╠╦╝           ║
-║     ╚═╝╚  ╚═╝  ╩ ╚═╝╚═╝ ╩   ╚═╝╚═╝╩ ╩ ╩ ╩╩╚═           ║
-║                                                          ║
-║        V1  -  AI App Builder (Offline)                   ║
-║                                                          ║
-║     Free  ·  Offline  ·  Persian  ·  Agent               ║
-║                                                          ║
-╚══════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   ██████╗ ██████╗ ██████╗ ███████╗███████╗███████╗ ██████╗   ║
+║   ██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔════╝██╔════╝██╔═══██╗ ║
+║   ██████╔╝██████╔╝██████╔╝█████╗  █████╗  ███████╗██║   ██║ ║
+║   ██╔═══╝ ██╔══██╗██╔══██╗██╔══╝  ██╔══╝  ╚════██║██║   ██║ ║
+║   ██║     ██║  ██║╚██████╔╝███████╗██║     ███████║╚██████╔╝ ║
+║   ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝  ║
+║                                                              ║
+║   ███████╗██╗     █████╗ ███████╗██╗  ██╗   ██╗   ██╗ ██╗    ║
+║   ██╔════╝██║    ██╔══██╗██╔════╝██║  ██║   ██║   ██║██╔╝    ║
+║   █████╗  ██║    ███████║███████╗███████║   ██║   ██║██╔╝     ║
+║   ██╔══╝  ██║    ██╔══██║╚════██║██╔══██║   ╚██╗ ██╔╝██╔╝     ║
+║   ██║     ███████╗██║  ██║███████║██║  ██║    ╚████╔╝ ██║      ║
+║   ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝     ╚═══╝  ╚═╝      ║
+║                                                              ║
+║        V1  ·  AI Agent  ·  Free  ·  Offline  ·  Persian      ║
+╚══════════════════════════════════════════════════════════════╝
 """
 
 
@@ -116,7 +123,7 @@ def ensure_packages(py):
 
 
 def detect_tools():
-    info = {"node": False, "ollama": False}
+    info = {"node": False, "ollama": False, "deepseek": False, "openrouter": False}
     if shutil.which("node"):
         info["node"] = True
         log("Node.js detected (برای تست واقعی جاوااسکریپت)")
@@ -124,11 +131,22 @@ def detect_tools():
         log("Node.js not found (تست ساختاری انجام می‌شود)")
     try:
         import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1):
+        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2):
             info["ollama"] = True
-            log("Ollama detected (اختیاری - برای پاسخ‌های باز)")
+            log("Ollama detected (موتور فکری محلی - کاملا آفلاین)")
     except Exception:
-        log("Ollama not detected (اختیاری)")
+        log("Ollama not detected (اختیاری - برای ساخت آفلاین نصب کنید)")
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        info["deepseek"] = True
+        log("DeepSeek API key found (موتور فکری آنلاین)")
+    else:
+        log("DEEPSEEK_API_KEY not set (اختیاری: set DEEPSEEK_API_KEY=... برای موتور DeepSeek)")
+    if os.environ.get("OPENROUTER_API_KEY"):
+        info["openrouter"] = True
+        log("OpenRouter API key found (موتور فکری آنلاین)")
+    else:
+        log("OPENROUTER_API_KEY not set (اختیاری)")
+    log("Pollinations: موتور رایگان بدون کلید - در صورت در دسترس بودن به‌کار می‌رود")
     return info
 
 
@@ -145,11 +163,12 @@ def open_browser(url):
 
 
 def main():
-    print(BANNER)
-    print("          Professor Flash V1  -  AI App Builder (Offline)")
-    print("          Free  ·  Offline  ·  Persian  ·  Agent")
-    print("=" * 62)
-    print()
+    if os.environ.get("PF_REEXEC") != "1":
+        print(BANNER)
+        print("          Professor Flash V1  -  AI App Builder (Offline)")
+        print("          Free  ·  Offline  ·  Persian  ·  Agent")
+        print("=" * 66)
+        print()
 
     log(f"OS: {sys.platform}")
     log(f"Python: {sys.version.split()[0]}")
@@ -164,6 +183,7 @@ def main():
             ensure_packages(py)
         if venv_has_flask(py):
             log("Switching to environment interpreter ...")
+            os.environ["PF_REEXEC"] = "1"
             os.execv(py, [py] + sys.argv)
         else:
             warn("Virtual environment is incomplete; continuing with the system interpreter.")

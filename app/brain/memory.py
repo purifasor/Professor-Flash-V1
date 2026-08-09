@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Persistent memory: conversation history, current project, learned facts.
+"""Persistent memory: sessions, conversation history, current project.
 
 Everything is stored in a single JSON file (memory.json) so the model can
 continue previous work after a restart. Writes are atomic (temp file +
@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import time
+import uuid
 
 
 class Memory:
@@ -17,12 +18,12 @@ class Memory:
         self.path = path
         self.lock = threading.Lock()
         self.data = {
-            "conversation": [],       # [{role, text, time}]
-            "current_project": None,  # project descriptor dict
-            "learned_facts": {},      # keyword phrase -> fact text
-            "corrections": [],        # [{template, error, fix}] applied fixes
-            "qa": {},                 # question soft-text -> answer
-            "counters": {},
+            "sessions": [],          # [{id, title, messages:[{id,role,text,time,kind}], updated}]
+            "active_session": None,  # session id
+            "current_project": None, # project descriptor dict
+            "learned_facts": {},     # keyword phrase -> fact text
+            "corrections": [],       # [{template, error, fix}]
+            "qa": {},                # question soft-text -> answer
         }
         self._load()
 
@@ -47,20 +48,85 @@ class Memory:
             except Exception:
                 pass
 
-    # ------------------------------------------------------------ history
-    def add_turn(self, role: str, text: str):
-        self.data["conversation"].append(
-            {"role": role, "text": text, "time": time.time()}
-        )
-        self.data["conversation"] = self.data["conversation"][-200:]
+    # ------------------------------------------------------------ sessions
+    def ensure_session(self):
+        """Return the active session, creating one when needed."""
+        sid = self.data.get("active_session")
+        for s in self.data["sessions"]:
+            if s["id"] == sid:
+                return s
+        s = {"id": uuid.uuid4().hex[:10], "title": "گفتگوی جدید",
+             "messages": [], "updated": time.time()}
+        self.data["sessions"].insert(0, s)
+        self.data["active_session"] = s["id"]
+        self.data["sessions"] = self.data["sessions"][:50]
+        self.save()
+        return s
+
+    def sessions(self):
+        return sorted(self.data["sessions"], key=lambda s: s.get("updated", 0), reverse=True)
+
+    def get_session(self, sid):
+        for s in self.data["sessions"]:
+            if s["id"] == sid:
+                return s
+        return None
+
+    def set_active_session(self, sid):
+        if self.get_session(sid):
+            self.data["active_session"] = sid
+            self.save()
+            return True
+        return False
+
+    def new_session(self):
+        self.data["active_session"] = None
+        self.ensure_session()
+        return self.data["active_session"]
+
+    def delete_session(self, sid):
+        if self.data.get("active_session") == sid:
+            self.data["active_session"] = None
+        self.data["sessions"] = [s for s in self.data["sessions"] if s["id"] != sid]
+        self.ensure_session()
         self.save()
 
+    def rename_session(self, sid, title):
+        s = self.get_session(sid)
+        if s:
+            s["title"] = (title or "گفتگوی جدید")[:40]
+            self.save()
+
+    def add_message(self, sid, role, text, kind="text"):
+        s = self.get_session(sid) or self.ensure_session()
+        mid = uuid.uuid4().hex[:10]
+        s["messages"].append({"id": mid, "role": role, "text": text,
+                              "time": time.time(), "kind": kind})
+        s["updated"] = time.time()
+        s["messages"] = s["messages"][-300:]
+        if s["title"] == "گفتگوی جدید" and role == "user":
+            s["title"] = text.strip()[:30]
+        self.save()
+        return mid
+
+    def delete_message(self, sid, mid):
+        s = self.get_session(sid)
+        if not s:
+            return False
+        before = len(s["messages"])
+        s["messages"] = [m for m in s["messages"] if m["id"] != mid]
+        s["updated"] = time.time()
+        self.save()
+        return len(s["messages"]) != before
+
+    # ------------------------------------------------------------ history
+    def add_turn(self, role: str, text: str):
+        s = self.ensure_session()
+        self.add_message(s["id"], role, text)
+
     def last_user_texts(self, n=6):
-        return [
-            t["text"]
-            for t in self.data["conversation"]
-            if t["role"] == "user"
-        ][-n:]
+        s = self.ensure_session()
+        return [m["text"] for m in s["messages"] if m["role"] == "user"][-n:]
 
     # ------------------------------------------------------------- project
     @property

@@ -1,418 +1,456 @@
-/* Professor Flash V1 - frontend logic */
-(function () {
-  "use strict";
+/* Professor Flash V1 - client */
 
-  var els = {
-    chatLog: document.getElementById("chatLog"),
-    input: document.getElementById("input"),
-    btnSend: document.getElementById("btnSend"),
-    workPane: document.getElementById("workPane"),
-    layout: document.getElementById("layout"),
-    btnPane: document.getElementById("btnPane"),
-    workTitle: document.getElementById("workTitle"),
-    workState: document.getElementById("workState"),
-    todoList: document.getElementById("todoList"),
-    logList: document.getElementById("logList"),
-    fileList: document.getElementById("fileList"),
-    previewZone: document.getElementById("previewZone"),
-    previewFrame: document.getElementById("previewFrame"),
-    previewTitle: document.getElementById("previewTitle"),
-    btnOpenPreview: document.getElementById("btnOpenPreview"),
-    btnClosePreview: document.getElementById("btnClosePreview"),
-    btnPause: document.getElementById("btnPause"),
-    btnResume: document.getElementById("btnResume"),
-    btnStop: document.getElementById("btnStop"),
-    badgeText: document.getElementById("badgeText"),
-    toast: document.getElementById("toast"),
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  sessionId: null,
+  taskId: null,
+  pollTimer: null,
+  busy: false,
+};
+
+/* ------------------------------------------------------------ helpers */
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function timeAgo(ts) {
+  const d = Date.now() / 1000 - ts;
+  if (d < 60) return "لحظاتی پیش";
+  if (d < 3600) return Math.floor(d / 60) + " دقیقه پیش";
+  if (d < 86400) return Math.floor(d / 3600) + " ساعت پیش";
+  return Math.floor(d / 86400) + " روز پیش";
+}
+
+function icon(name) {
+  const icons = {
+    copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>',
+    trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>',
+    check: '<svg viewBox="0 0 24 24"><path d="M5 13l4 4 10-10" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
+  return icons[name] || "";
+}
 
-  var taskId = null;
-  var pollTimer = null;
-  var busy = false;
-  var shownLogCount = 0;
-  var currentProjectName = null;
-  var currentPreview = null;
+/* ----------------------------------------------------------- elements */
+const chatEl = $("chat");
+const heroEl = $("hero");
+const logsEl = $("logs");
+const todosEl = $("todos");
+const filesEl = $("files");
+const sessionsEl = $("sessions");
+const inputEl = $("input");
+const controlsEl = $("controls");
+const taskStateEl = $("taskState");
+const taskStatusEl = $("taskStatus");
 
-  /* ---------------------------------------------------------- helpers */
-  function esc(s) {
-    var d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
-  }
-
-  function renderMarkdown(text) {
-    var out = "";
-    var parts = text.split(/```/);
-    for (var i = 0; i < parts.length; i++) {
-      if (i % 2 === 1) {
-        out += "<pre>" + esc(parts[i]) + "</pre>";
-      } else {
-        out += esc(parts[i])
-          .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-          .replace(/`([^`]+)`/g, "<code>$1</code>")
-          .replace(/\n/g, "<br>");
-      }
-    }
-    return out;
-  }
-
-  var AVATARS = {
-    ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 L4.5 13.5 H11 L9.5 22 L19.5 9.5 H12.5 L13 2 Z"/></svg>',
-    user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>'
-  };
-
-  function addMessage(role, text) {
-    var wrap = document.createElement("div");
-    wrap.className = "msg " + role;
-    var avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.innerHTML = AVATARS[role] || "";
-    var bubble = document.createElement("div");
-    bubble.className = "bubble";
-    bubble.innerHTML = renderMarkdown(text);
-    wrap.appendChild(avatar);
-    wrap.appendChild(bubble);
-    els.chatLog.appendChild(wrap);
-    els.chatLog.scrollTop = els.chatLog.scrollHeight;
-    return wrap;
-  }
-
-  function hideEmptyState() {
-    var es = document.getElementById("emptyState");
-    if (es) es.style.display = "none";
-  }
-
-  function setupSuggestions() {
-    var ideas = [
-      "یه بازی مار بساز با تم سایبرپانکی",
-      "یک سایت برای معرفی خودم بساز",
-      "یه بوم نقاشی بساز",
-      "لیست کار روزانه بساز",
-      "یه بازی حدس عدد بساز",
-      "سیاهچاله چیه ؟",
-      "۵ + ۷ × ۳",
-    ];
-    var box = document.getElementById("suggestions");
-    if (!box) return;
-    ideas.forEach(function (idea) {
-      var c = document.createElement("button");
-      c.className = "chip";
-      c.textContent = idea;
-      c.addEventListener("click", function () {
-        els.input.value = idea;
-        hideEmptyState();
-        send();
-      });
-      box.appendChild(c);
-    });
-  }
-
-  function addTyping() {
-    var wrap = document.createElement("div");
-    wrap.className = "msg ai";
-    wrap.id = "typing";
-    var b = document.createElement("div");
-    b.className = "bubble typing";
-    for (var i = 0; i < 3; i++) {
-      var t = document.createElement("span");
-      t.className = "tick";
-      b.appendChild(t);
-    }
-    wrap.appendChild(b);
-    els.chatLog.appendChild(wrap);
-    els.chatLog.scrollTop = els.chatLog.scrollHeight;
-  }
-
-  function removeTyping() {
-    var t = document.getElementById("typing");
-    if (t) t.remove();
-  }
-
-  function showToast(text) {
-    els.toast.textContent = text;
-    els.toast.hidden = false;
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(function () { els.toast.hidden = true; }, 2600);
-  }
-
-  /* ------------------------------------------------------- work pane */
-  function setBusy(state) {
-    busy = state;
-    els.btnSend.disabled = state;
-    els.btnPause.classList.toggle("hidden", !state);
-    els.btnStop.classList.toggle("hidden", !state);
-    els.btnResume.classList.toggle("hidden", !(state && els.workState.classList.contains("paused")));
-  }
-
-  function setWorkState(label, cls) {
-    els.workState.textContent = label;
-    els.workState.className = "work-state" + (cls ? " " + cls : "");
-    els.btnResume.classList.toggle("hidden", !(busy && cls === "paused"));
-  }
-
-  function openWorkPane(title) {
-    els.workPane.hidden = false;
-    els.layout.classList.add("has-work");
-    if (title) els.workTitle.textContent = title;
-  }
-
-  function openPreview(url, name) {
-    currentPreview = url;
-    currentProjectName = name || "پروژه";
-    els.previewZone.hidden = false;
-    els.layout.classList.add("has-preview");
-    els.previewTitle.textContent = "پیش‌نمایش: " + (name || "پروژه");
-    els.previewFrame.src = url;
-  }
-
-  els.btnClosePreview.addEventListener("click", function () {
-    els.previewZone.hidden = true;
-    els.layout.classList.remove("has-preview");
-    els.previewFrame.src = "about:blank";
-  });
-
-  els.btnOpenPreview.addEventListener("click", function () {
-    if (currentPreview) window.open(currentPreview, "_blank");
-  });
-
-  els.btnPane.addEventListener("click", function () {
-    if (els.workPane.hidden) {
-      openWorkPane("محیط کار");
+/* -------------------------------------------------------------- model */
+async function loadModel() {
+  try {
+    const r = await fetch("/api/model");
+    const m = await r.json();
+    const badge = $("brainText");
+    const dot = $("brainDot");
+    if (m.activeProvider) {
+      badge.textContent = "موتور فکری: " + m.activeProvider;
+      dot.className = "dot ok";
     } else {
-      els.workPane.hidden = true;
-      els.layout.classList.remove("has-work");
+      badge.textContent = "حالت محلی (بدون موتور فکری)";
+      dot.className = "dot local";
     }
-  });
+    $("learnedChip").textContent = "یادگیری: " + (m.learnedCount || 0);
+    if (m.projectsRoot) $("pathChip").textContent = m.projectsRoot;
+  } catch (e) { /* offline */ }
+}
 
-  /* tabs */
-  document.querySelectorAll(".tab").forEach(function (tab) {
-    tab.addEventListener("click", function () {
-      document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
-      tab.classList.add("active");
-      var name = tab.getAttribute("data-tab");
-      ["todo", "log", "files"].forEach(function (n) {
-        document.getElementById("tab-" + n).classList.toggle("hidden", n !== name);
-      });
-    });
-  });
+/* ------------------------------------------------------------ messages */
+function addMessage(role, text, mid, animate) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (role === "user" ? "user" : "bot");
+  wrap.dataset.mid = mid || "";
+  const actions = mid
+    ? `<div class="actions">
+         <button class="act-copy" title="کپی">${icon("copy")}</button>
+         <button class="act-del" title="حذف">${icon("trash")}</button>
+       </div>`
+    : "";
+  wrap.innerHTML = `
+    <div class="avatar">${role === "user" ? "شما" : "PF"}</div>
+    <div class="bubble">${esc(text)}${actions}</div>`;
+  chatEl.appendChild(wrap);
+  if (animate !== false) scrollDown();
+  return wrap;
+}
 
-  /* ---------------------------------------------------------- todos */
-  function renderTodos(todos) {
-    els.todoList.innerHTML = "";
-    todos.forEach(function (todo, idx) {
-      var li = document.createElement("li");
-      li.className = todo.done ? "done" : "";
-      var check = document.createElement("span");
-      check.className = "check";
-      check.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>';
-      var txt = document.createElement("span");
-      txt.textContent = (idx + 1) + ". " + todo.text;
-      li.appendChild(check);
-      li.appendChild(txt);
-      els.todoList.appendChild(li);
-    });
-    if (!todos.length) {
-      var li = document.createElement("li");
-      li.textContent = "هنوز وظیفه‌ای تعریف نشده";
-      li.style.opacity = "0.6";
-      els.todoList.appendChild(li);
-    }
+function addNote(text) {
+  const n = document.createElement("div");
+  n.className = "note";
+  n.textContent = text;
+  chatEl.appendChild(n);
+  scrollDown();
+  return n;
+}
+
+function thinkingBubble(text) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg bot";
+  wrap.id = "thinking";
+  wrap.innerHTML = `
+    <div class="avatar">PF</div>
+    <div class="bubble thinking">
+      <div class="dots"><span></span><span></span><span></span></div>
+      <span class="think-text">${esc(text || "در حال فکر کردن...")}</span>
+    </div>`;
+  chatEl.appendChild(wrap);
+  scrollDown();
+  return wrap;
+}
+
+function updateThinking(text) {
+  const el = $("thinking");
+  if (el) el.querySelector(".think-text").textContent = text || "در حال فکر کردن...";
+}
+
+function removeThinking() {
+  const el = $("thinking");
+  if (el) el.remove();
+}
+
+function scrollDown() {
+  const sc = $("chatScroll");
+  sc.scrollTop = sc.scrollHeight;
+}
+
+/* ------------------------------------------------------------- sandbox */
+function setTaskStatus(status) {
+  taskStatusEl.textContent =
+    status === "running" ? "در حال اجرا" :
+    status === "queued" ? "در صف" :
+    status === "paused" ? "متوقف موقت" :
+    status === "done" ? "انجام شد" :
+    status === "stopped" ? "متوقف شد" :
+    status === "error" ? "خطا" : "آماده";
+  taskStatusEl.className = "task-status " +
+    (status === "running" ? "run" : status === "done" ? "done" :
+     status === "error" ? "err" : status === "queued" || status === "paused" ? "queued" : "");
+}
+
+function renderTodos(todos) {
+  todosEl.innerHTML = "";
+  if (!todos || !todos.length) {
+    todosEl.innerHTML = '<div class="empty">هنوز وظیفه‌ای تعریف نشده است.</div>';
+    return;
   }
+  const firstUndone = todos.findIndex((t) => !t.done);
+  todos.forEach((t, i) => {
+    const el = document.createElement("div");
+    el.className = "todo" + (t.done ? " done" : "") + (i === firstUndone ? " now" : "");
+    el.innerHTML = `<div class="check">${icon("check")}</div><div>${esc(t.text)}</div>`;
+    todosEl.appendChild(el);
+  });
+}
 
-  /* ---------------------------------------------------------- logs */
-  var LV_FA = { info: "نکته", ok: "تأیید", skip: "رد شد", warn: "هشدار", error: "خطا" };
-
-  function renderLogs(logs) {
-    for (var i = shownLogCount; i < logs.length; i++) {
-      var l = logs[i];
-      var div = document.createElement("div");
-      div.className = "log-line";
-      var lv = document.createElement("span");
-      lv.className = "lv " + (LV_FA[l.level] ? l.level : "info");
-      lv.textContent = LV_FA[l.level] || "نکته";
-      var txt = document.createElement("span");
-      txt.className = "txt";
-      txt.innerHTML = esc(l.text);
-      div.appendChild(lv);
-      div.appendChild(txt);
-      els.logList.appendChild(div);
-    }
-    shownLogCount = logs.length;
-    var logTab = document.getElementById("tab-log");
-    if (!logTab.classList.contains("hidden")) {
-      logTab.scrollTop = logTab.scrollHeight;
-    }
+function renderLogs(logs) {
+  if (!logs || !logs.length) {
+    logsEl.innerHTML = '<div class="empty">گزارش فعالیت‌ها اینجا نمایش داده می‌شود.</div>';
+    return;
   }
+  const frag = document.createDocumentFragment();
+  logs.forEach((l) => {
+    const el = document.createElement("div");
+    el.className = "log " + (l.level === "error" ? "err" : l.level === "skip" ? "skip" : "");
+    const t = new Date(l.time * 1000);
+    const ts = String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+    el.innerHTML = `<span class="t">${ts}</span>${esc(l.text)}`;
+    frag.appendChild(el);
+  });
+  logsEl.innerHTML = "";
+  logsEl.appendChild(frag);
+  logsEl.scrollTop = logsEl.scrollHeight;
+}
 
-  /* ---------------------------------------------------------- files */
-  function renderFiles(files) {
-    els.fileList.innerHTML = "";
-    if (!files.length) {
-      var li = document.createElement("li");
-      li.textContent = "فایلی ساخته نشده";
-      li.style.opacity = "0.6";
-      els.fileList.appendChild(li);
+function renderFiles(files) {
+  filesEl.innerHTML = "";
+  if (!files || !files.length) {
+    filesEl.innerHTML = '<div class="empty">فایل‌های ساخته‌شده اینجا نمایش داده می‌شوند.</div>';
+    return;
+  }
+  files.forEach((f) => {
+    const el = document.createElement("div");
+    el.className = "file";
+    el.innerHTML = `<span class="fname">${esc(f.path)}</span><span class="fsize">${Number(f.size).toLocaleString("fa-IR")} B</span>`;
+    filesEl.appendChild(el);
+  });
+}
+
+/* ------------------------------------------------------------- polling */
+async function pollTask(tid) {
+  try {
+    const r = await fetch("/api/task/" + tid);
+    const t = await r.json();
+    if (r.status !== 200) return stopPolling();
+
+    setTaskStatus(t.status);
+    if (t.todos) renderTodos(t.todos);
+    if (t.logs) renderLogs(t.logs);
+    if (t.files) renderFiles(t.files);
+
+    if (t.status === "running" || t.status === "queued" || t.status === "paused") {
+      const pending = (t.todos || []).find((x) => !x.done);
+      updateThinking(pending ? pending.text : t.status === "queued" ? "در صف انتظار..." : "در حال فکر کردن...");
+      controlsEl.hidden = false;
+      $("btnPause").disabled = t.status !== "running";
+      $("btnResume").disabled = t.status !== "paused";
+      taskStateEl.textContent = t.status === "queued" ? "پیام شما در صف است؛ بعد از کار جاری پاسخ می‌دهم" : "";
+      state.pollTimer = setTimeout(() => pollTask(tid), 700);
       return;
     }
-    files.forEach(function (f) {
-      var li = document.createElement("li");
-      var name = document.createElement("span");
-      name.className = "fname";
-      name.textContent = f.path;
-      var size = document.createElement("span");
-      size.className = "fsize";
-      size.textContent = f.size + " بایت";
-      li.appendChild(name);
-      li.appendChild(size);
-      els.fileList.appendChild(li);
-    });
-  }
 
-  /* ------------------------------------------------------ task poll */
-  function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  }
-
-  function pollTask() {
-    fetch("/api/task/" + taskId)
-      .then(function (r) { return r.json(); })
-      .then(function (state) {
-        renderTodos(state.todos);
-        renderLogs(state.logs);
-        renderFiles(state.files);
-
-        if (state.status === "running") {
-          setWorkState("در حال انجام", "busy");
-        } else if (state.status === "paused") {
-          setWorkState("توقف موقت", "paused");
-        } else {
-          stopPolling();
-          finishTask(state);
-        }
-      })
-      .catch(function () { stopPolling(); setBusy(false); });
-  }
-
-  function finishTask(state) {
-    setBusy(false);
-    removeTyping();
-
-    if (state.status === "done") {
-      setWorkState("انجام شد", "done");
-      if (state.reply) addMessage("ai", state.reply);
-      if (state.preview) {
-        var name = state.reply ? extractProjectName(state.reply) : null;
-        openPreview(state.preview, name);
-      }
-      showToast("پروژه ساخته و تست شد");
-    } else if (state.status === "stopped") {
-      setWorkState("متوقف شد", null);
-      if (state.reply) addMessage("ai", state.reply);
-      showToast("توقف کامل فعال شد");
-    } else if (state.status === "error") {
-      setWorkState("خطا", "error");
-      addMessage("ai", "خطایی پیش آمد: " + (state.error || "ناشناخته"));
-      showToast("خطا در پردازش");
+    // finished
+    stopPolling();
+    removeThinking();
+    controlsEl.hidden = true;
+    taskStateEl.textContent = "";
+    if (t.status === "error") {
+      addNote("خطا: " + (t.error || "نامشخص"));
+      return;
     }
-
-    // keep work pane open showing results; allow closing via button
+    if (t.status === "stopped") {
+      addNote("کار متوقف شد.");
+      if (t.reply) addMessage("assistant", t.reply, null);
+      return;
+    }
+    if (t.reply) addMessage("assistant", t.reply, null);
+    loadModel(); // refresh brain badge + learned count
+    loadSessions(); // refresh sidebar counts
+  } catch (e) {
+    stopPolling();
   }
+}
 
-  function extractProjectName(reply) {
-    var m = reply.match(/پروژه «([^»]+)»/);
-    return m ? m[1] : null;
+// keep delivering answers even if the tab was in the background
+// (browsers throttle timers in background tabs - re-poll on return)
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.taskId && !state.pollTimer) {
+    pollTask(state.taskId);
   }
+});
 
-  /* ----------------------------------------------------------- send */
-  function send() {
-    var text = els.input.value.trim();
-    if (!text || busy) return;
-    hideEmptyState();
-    els.input.value = "";
-    autoGrow();
-    addMessage("user", text);
-    addTyping();
+function stopPolling() {
+  if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
+  state.taskId = null;
+  state.busy = false;
+  controlsEl.hidden = true;
+  setTaskStatus(null);
+}
 
-    fetch("/api/chat", {
+/* --------------------------------------------------------------- send */
+async function send(text) {
+  text = (text || "").trim();
+  if (!text || state.busy) return;
+  state.busy = true;
+
+  addMessage("user", text, null);
+  heroEl.classList.remove("show");
+  thinkingBubble("در حال فکر کردن...");
+  renderTodos([]);
+  renderLogs([]);
+  renderFiles([]);
+  setTaskStatus("running");
+
+  try {
+    const r = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.taskId) {
-          taskId = data.taskId;
-          shownLogCount = 0;
-          setBusy(true);
-          setWorkState("در حال انجام", "busy");
-          openWorkPane("محیط کار");
-          pollTask();
-          pollTimer = setInterval(pollTask, 350);
-        } else if (data.error) {
-          removeTyping();
-          addMessage("ai", "خطا: " + data.error);
-        }
-      })
-      .catch(function () {
-        removeTyping();
-        setBusy(false);
-        addMessage("ai", "نتوانستم به سرور وصل شوم. مطمئن شو run.py در حال اجراست.");
-      });
-  }
-
-  els.btnSend.addEventListener("click", send);
-
-  els.input.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
+      body: JSON.stringify({ message: text, sessionId: state.sessionId }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      removeThinking();
+      addNote("خطا: " + (data.error || "نامشخص"));
+      state.busy = false;
+      return;
     }
-  });
-
-  function autoGrow() {
-    els.input.style.height = "auto";
-    els.input.style.height = Math.min(els.input.scrollHeight, 170) + "px";
+    if (data.sessionId) state.sessionId = data.sessionId;
+    if (data.control) {
+      removeThinking();
+      addNote(data.note || "فرمان ثبت شد.");
+      state.busy = false;
+      return;
+    }
+    if (data.status === "queued") {
+      addNote(data.note || "پیام در صف قرار گرفت.");
+    }
+    state.taskId = data.taskId;
+    pollTask(data.taskId);
+    loadSessions();
+  } catch (e) {
+    removeThinking();
+    addNote("اتصال به سرور برقرار نشد.");
+    state.busy = false;
   }
-  els.input.addEventListener("input", autoGrow);
+}
 
-  /* ------------------------------------------------------ controls */
-  els.btnPause.addEventListener("click", function () {
-    if (!taskId) return;
-    fetch("/api/task/" + taskId + "/pause", { method: "POST" });
-    setWorkState("توقف موقت", "paused");
-  });
+/* -------------------------------------------------------------- input */
+function autoGrow() {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
+}
 
-  els.btnResume.addEventListener("click", function () {
-    if (!taskId) return;
-    fetch("/api/task/" + taskId + "/resume", { method: "POST" });
-    setWorkState("در حال انجام", "busy");
-  });
+inputEl.addEventListener("input", autoGrow);
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    const v = inputEl.value;
+    inputEl.value = "";
+    autoGrow();
+    send(v);
+  }
+});
+$("btnSend").addEventListener("click", () => send(inputEl.value));
 
-  els.btnStop.addEventListener("click", function () {
-    if (!taskId) return;
-    fetch("/api/task/" + taskId + "/stop", { method: "POST" });
-    setWorkState("در حال توقف", null);
-  });
+/* ------------------------------------------------------------ controls */
+$("btnPause").addEventListener("click", () => fetch("/api/task/" + state.taskId + "/pause", { method: "POST" }));
+$("btnResume").addEventListener("click", () => fetch("/api/task/" + state.taskId + "/resume", { method: "POST" }));
+$("btnStop").addEventListener("click", async () => {
+  await fetch("/api/task/" + state.taskId + "/stop", { method: "POST" });
+  addNote("فرمان توقف کامل ارسال شد.");
+});
 
-  /* ----------------------------------------------------------- init */
-  function init() {
-    // welcome message
-    fetch("/api/model")
-      .then(function (r) { return r.json(); })
-      .then(function (m) {
-        if (m.node) {
-          els.badgeText.textContent = "آفلاین · رایگان · Node آماده";
+/* ----------------------------------------------------------- messages */
+chatEl.addEventListener("click", async (e) => {
+  const bubble = e.target.closest(".bubble");
+  if (!bubble) return;
+  const wrap = bubble.closest(".msg");
+  const mid = wrap.dataset.mid;
+  if (!mid) return;
+
+  if (e.target.closest(".act-copy")) {
+    const text = bubble.childNodes[0].textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    addNote("کپی شد.");
+    return;
+  }
+  if (e.target.closest(".act-del")) {
+    try {
+      await fetch(`/api/history/${state.sessionId}/messages/${mid}/delete`, { method: "POST" });
+    } catch (err) { /* ignore */ }
+    wrap.remove();
+  }
+});
+
+/* ------------------------------------------------------------ sessions */
+async function loadSessions() {
+  try {
+    const r = await fetch("/api/history");
+    const d = await r.json();
+    state.sessionId = d.active;
+    sessionsEl.innerHTML = "";
+    (d.sessions || []).forEach((s) => {
+      const el = document.createElement("div");
+      el.className = "session" + (s.active ? " active" : "");
+      el.innerHTML = `
+        <div class="session-title">${esc(s.title)}</div>
+        <div class="session-meta">${s.count} پیام · ${timeAgo(s.updated)}</div>
+        <button class="session-del" title="حذف گفتگو">${icon("trash")}</button>`;
+      el.addEventListener("click", (ev) => {
+        if (ev.target.closest(".session-del")) {
+          deleteSession(s.id, el);
+          return;
         }
-        var welcome =
-          "سلام! من Professor Flash V1 هستم؛ هوش مصنوعی آفلاین و رایگان که می‌فهمد، فکر می‌کند و برنامه می‌سازد.\n" +
-          "کافی است بگویی چه برنامه‌ای می‌خواهی؛ مثلا «یه بازی مار بساز»، «یک سایت بساز» یا هر سوالی بپرس.";
-        addMessage("ai", welcome);
-        setupSuggestions();
-      })
-      .catch(function () {
-        addMessage("ai", "سلام! من Professor Flash هستم. سرویس در حال راه‌اندازی است؛ کمی صبر کن.");
+        switchSession(s.id);
       });
-  }
+      sessionsEl.appendChild(el);
+    });
+    if (d.active) await loadMessages(d.active);
+  } catch (e) { /* offline */ }
+}
 
-  init();
+async function switchSession(sid) {
+  if (state.busy) return;
+  await fetch("/api/session/" + sid + "/activate", { method: "POST" });
+  await loadSessions();
+}
+
+async function deleteSession(sid, el) {
+  if (state.busy) return;
+  await fetch("/api/history/" + sid + "/delete", { method: "POST" });
+  await loadSessions();
+}
+
+$("btnNewSession").addEventListener("click", async () => {
+  if (state.busy && !state.taskId) return;
+  stopPolling();
+  const r = await fetch("/api/session/new", { method: "POST" });
+  const d = await r.json();
+  state.sessionId = d.sessionId;
+  chatEl.innerHTML = "";
+  heroEl.classList.add("show");
+  renderTodos([]);
+  renderLogs([]);
+  renderFiles([]);
+  setTaskStatus(null);
+  await loadSessions();
+});
+
+async function loadMessages(sid) {
+  try {
+    const r = await fetch("/api/history/" + sid);
+    const s = await r.json();
+    chatEl.innerHTML = "";
+    (s.messages || []).forEach((m) => {
+      if (m.kind === "note") { addNote(m.text); return; }
+      addMessage(m.role, m.text, m.id, false);
+    });
+    heroEl.classList.toggle("show", !(s.messages || []).length);
+    scrollDown();
+  } catch (e) { /* offline */ }
+}
+
+/* ---------------------------------------------------------------- tabs */
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    ["logs", "todos", "files"].forEach((k) => {
+      $("tab-" + k).hidden = k !== tab.dataset.tab;
+    });
+  });
+});
+
+/* -------------------------------------------------------------- chips */
+const SUGGESTIONS = [
+  "یه بازی مار بساز با تم سایبرپانکی",
+  "یک سایت معرفی آب و هوا بساز",
+  "سیاهچاله چیه؟",
+  "۲۵ × ۴ + ۱۰۰",
+  "2x + 3 = 11 چنده؟",
+  "نیرو با جرم ۵ و شتاب ۲ چقدره؟",
+  "سرچ کن درباره تلسکوپ جیمز وب",
+];
+
+function renderChips() {
+  const wrap = $("chips");
+  SUGGESTIONS.forEach((s) => {
+    const b = document.createElement("button");
+    b.className = "chip-sug";
+    b.textContent = s;
+    b.addEventListener("click", () => send(s));
+    wrap.appendChild(b);
+  });
+}
+
+/* -------------------------------------------------------------- init */
+(async function init() {
+  renderChips();
+  await loadModel();
+  await loadSessions();
 })();

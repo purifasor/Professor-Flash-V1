@@ -2,18 +2,20 @@
 """Professor Flash web server.
 
 Endpoints:
-  GET  /                         -> UI
-  GET  /api/model                -> model info
-  POST /api/chat                 -> start a task (async)
-  GET  /api/task/<tid>           -> task state
-  POST /api/task/<tid>/pause     -> pause after current step
-  POST /api/task/<tid>/resume    -> resume
-  POST /api/task/<tid>/stop      -> force stop
-  GET  /api/projects             -> list built projects
-  GET  /preview/<pid>/...        -> serve a built project
+  GET  /                       -> UI
+  GET  /api/model              -> model + brain-mode info
+  POST /api/chat               -> start a task (or queue it while one runs)
+  GET  /api/task/<tid>         -> task state (todos/logs/files live)
+  POST /api/task/<tid>/pause|resume|stop
+  GET  /api/history            -> sessions list
+  GET  /api/history/<sid>      -> session messages
+  POST /api/history/<sid>/delete
+  POST /api/history/<sid>/messages/<mid>/delete
+  POST /api/session/new        -> start a fresh session
+  POST /api/session/<sid>/activate
+  GET  /api/projects           -> built projects
 
-The werkzeug access logger is silenced so the console stays clean; the
-frontend polls /api/task only while a task is actually running.
+The werkzeug access logger is silenced so the console stays clean.
 """
 
 import logging
@@ -22,18 +24,21 @@ import threading
 import time
 import uuid
 
-from flask import Flask, jsonify, request, send_from_directory, send_file
+from flask import Flask, jsonify, request, send_from_directory
 
 from .brain.engine import Brain, TaskStopped
+from .brain.llm import Llm
 from .brain.memory import Memory
+from .brain import persian
 
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 logging.getLogger("flask").setLevel(logging.WARNING)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-PROJECTS_DIR = os.path.join(os.path.dirname(BASE_DIR), "projects")
-MEMORY_PATH = os.path.join(os.path.dirname(BASE_DIR), "memory.json")
+ROOT_DIR = os.path.dirname(BASE_DIR)
+PROJECTS_DIR = os.path.join(ROOT_DIR, "projects")
+MEMORY_PATH = os.path.join(ROOT_DIR, "memory.json")
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="")
 app.config["JSON_AS_ASCII"] = False
@@ -41,31 +46,110 @@ app.config["JSON_AS_ASCII"] = False
 TASKS = {}
 TASKS_LOCK = threading.Lock()
 CURRENT_TASK = {"id": None}
+QUEUE = []  # list of queued Task objects waiting for the active one to finish
 
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 memory = Memory(MEMORY_PATH)
+llm = Llm()
+
+from .brain.engine import STOP_WORDS, PAUSE_WORDS, RESUME_WORDS
+
+
+def _is_control(message, words):
+    s = persian.soft(message)
+    return any(persian.soft(w) in s for w in words)
+
+
+def _start_task(task):
+    task.started_at = time.time()
+    task.thread = threading.Thread(target=_run_task, args=(task,), daemon=True)
+    task.thread.start()
+
+
+def _run_task(task):
+    brain = Brain(memory, PROJECTS_DIR, emit=task.emit, llm=llm)
+    try:
+        result = brain.think(task.message)
+        task.reply = result.get("reply")
+        task.project = result.get("project")
+        task.root = result.get("root")
+        if task.status not in ("stopped", "queued"):
+            task.status = "done"
+    except TaskStopped:
+        task.status = "stopped"
+        task.reply = "توقف کامل فعال شد؛ کار متوقف ماند."
+    except Exception as exc:  # defensive
+        logging.getLogger("pf").exception("task failed")
+        task.status = "error"
+        task.error = str(exc)
+        task.reply = "خطایی در پردازش پیش آمد: " + str(exc)
+    finally:
+        # persist the assistant message in the conversation (only once)
+        if task.sid and task.reply and not task.assistant_saved:
+            memory.add_message(task.sid, "assistant", task.reply)
+            task.assistant_saved = True
+        # run the next queued message, if any
+        _process_queue()
+
+
+def _watchdog():
+    """Safety net: no task may run forever. Force-completes stuck tasks."""
+    while True:
+        time.sleep(5)
+        now = time.time()
+        force = False
+        with TASKS_LOCK:
+            for t in list(TASKS.values()):
+                if t.status == "running" and t.started_at and now - t.started_at > 120:
+                    t._stop_evt.set()
+                    t._pause_evt.set()
+                    t.status = "done"
+                    t.reply = ("پاسخ در زمان مجاز آماده نشد (اینترنت یا مدل محلی در دسترس نبود). "
+                               "دوباره تلاش کن.")
+                    if t.sid and not t.assistant_saved:
+                        memory.add_message(t.sid, "assistant", t.reply)
+                        t.assistant_saved = True
+                    force = True
+        if force:
+            _process_queue()
+
+
+threading.Thread(target=_watchdog, daemon=True).start()
+
+
+def _process_queue():
+    with TASKS_LOCK:
+        while QUEUE:
+            nxt = QUEUE.pop(0)
+            if nxt.status == "stopped":
+                continue
+            CURRENT_TASK["id"] = nxt.id
+            nxt.status = "running"
+            _start_task(nxt)
+            return
 
 
 class Task:
-    """A running brain task with pause / stop control."""
-
-    def __init__(self, tid, message):
+    def __init__(self, tid, message, sid):
         self.id = tid
         self.message = message
-        self.status = "running"  # running | paused | done | stopped | error
-        self.todos = []          # [{text, done}]
-        self.logs = []           # [{level, text, time}]
-        self.files = []          # [{path, size}]
-        self.preview = None
+        self.sid = sid
+        self.status = "running"  # running | queued | paused | done | stopped | error
+        self.todos = []
+        self.logs = []
+        self.files = []
         self.reply = None
+        self.project = None
+        self.root = None
         self.error = None
+        self.started_at = None
+        self.assistant_saved = False
         self._pause_evt = threading.Event()
         self._pause_evt.set()
         self._stop_evt = threading.Event()
         self.thread = None
 
-    # ------------------------------------------------------------ control
     def pause(self):
         if self.status == "running":
             self.status = "paused"
@@ -79,12 +163,10 @@ class Task:
     def stop(self):
         self._stop_evt.set()
         self._pause_evt.set()
-        if self.status in ("running", "paused"):
+        if self.status in ("running", "paused", "queued"):
             self.status = "stopped"
 
-    # -------------------------------------------------------------- emit
     def emit(self, kind, payload):
-        """Called by the brain between steps. Handles pause/stop."""
         if self._stop_evt.is_set():
             raise TaskStopped()
         while not self._pause_evt.is_set():
@@ -115,30 +197,13 @@ class Task:
             "id": self.id,
             "status": self.status,
             "todos": self.todos,
-            "logs": self.logs[-80:],
+            "logs": self.logs[-120:],
             "files": self.files,
-            "preview": self.preview,
             "reply": self.reply,
+            "project": self.project,
+            "root": self.root,
             "error": self.error,
         }
-
-
-def _run_task(task):
-    brain = Brain(memory, PROJECTS_DIR, emit=task.emit)
-    try:
-        result = brain.think(task.message)
-        task.reply = result.get("reply")
-        task.preview = result.get("preview")
-        if task.status != "stopped":
-            task.status = "done"
-    except TaskStopped:
-        task.status = "stopped"
-        task.reply = "توقف کامل فعال شد؛ کار متوقف ماند. اگر بخواهی می‌توانم از اول یا از مرحله بعد ادامه دهم."
-    except Exception as exc:  # pragma: no cover - defensive
-        logging.getLogger("pf").exception("task failed")
-        task.status = "error"
-        task.error = str(exc)
-        task.reply = "خطایی در پردازش پیش آمد: " + str(exc)
 
 
 @app.route("/")
@@ -148,44 +213,78 @@ def index():
 
 @app.route("/api/model")
 def api_model():
-    import shutil
     from . import __version__
-    node = shutil.which("node") is not None
     proj = memory.current_project
     return jsonify({
         "free": True,
         "name": "Professor Flash V1",
-        "offline": True,
-        "type": "local-hybrid",
         "version": __version__,
-        "node": node,
-        "python": True,
+        "type": "hybrid-agent",
+        "providers": llm.status(),
+        "activeProvider": llm.active_provider(),
+        "learnedCount": _learned_count(),
+        "projectsRoot": PROJECTS_DIR,
         "currentProject": {
-            "id": proj["id"], "name": proj["name"], "preview": f"/preview/{proj['id']}/"
+            "id": proj["id"], "name": proj["name"], "root": proj["root"]
         } if proj else None,
     })
 
 
+def _learned_count():
+    try:
+        from .brain import learn as learn_mod
+        l = learn_mod.Learn(ROOT_DIR)
+        return l.count()
+    except Exception:
+        return 0
+
+
+# ------------------------------------------------------------------ chat
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
     if not message:
         return jsonify({"error": "پیام خالی است"}), 400
+    sid = data.get("sessionId") or memory.data.get("active_session")
 
-    # one active task at a time: stop the previous one gracefully
+    memory.add_message(sid, "user", message)
+
     with TASKS_LOCK:
-        prev = CURRENT_TASK["id"]
-        if prev and prev in TASKS and TASKS[prev].status in ("running", "paused"):
-            TASKS[prev].stop()
+        current = TASKS.get(CURRENT_TASK["id"])
+
+        # control words act on the running task immediately
+        if current and current.status in ("running", "paused", "queued"):
+            if _is_control(message, STOP_WORDS):
+                current.stop()
+                return jsonify({"taskId": current.id, "control": "stop",
+                                "note": "توقف کامل فعال شد."})
+            if _is_control(message, PAUSE_WORDS):
+                current.pause()
+                return jsonify({"taskId": current.id, "control": "pause",
+                                "note": "توقف موقت فعال شد؛ بعد از اتمام مرحله فعلی می‌ایستد."})
+            if _is_control(message, RESUME_WORDS):
+                current.resume()
+                return jsonify({"taskId": current.id, "control": "resume",
+                                "note": "ادامه داده شد."})
+
+        # a task is running -> queue this message (never mix it into the build)
+        if current and current.status in ("running", "paused"):
+            tid = uuid.uuid4().hex[:10]
+            task = Task(tid, message, sid)
+            task.status = "queued"
+            TASKS[tid] = task
+            QUEUE.append(task)
+            return jsonify({"taskId": tid, "status": "queued",
+                            "note": "در صف قرار گرفت؛ بعد از اتمام کار جاری پاسخ می‌دهم."})
+
+        # start a fresh task
         tid = uuid.uuid4().hex[:10]
-        task = Task(tid, message)
+        task = Task(tid, message, sid)
         TASKS[tid] = task
         CURRENT_TASK["id"] = tid
-
-    task.thread = threading.Thread(target=_run_task, args=(task,), daemon=True)
-    task.thread.start()
-    return jsonify({"taskId": tid, "status": "running"})
+        _start_task(task)
+        return jsonify({"taskId": tid, "status": "running"})
 
 
 @app.route("/api/task/<tid>")
@@ -220,6 +319,63 @@ def api_stop(tid):
     return jsonify({"ok": True})
 
 
+# --------------------------------------------------------------- history
+@app.route("/api/history")
+def api_history():
+    sessions = []
+    for s in memory.sessions():
+        sessions.append({
+            "id": s["id"],
+            "title": s["title"],
+            "updated": s["updated"],
+            "count": len(s["messages"]),
+            "active": s["id"] == memory.data.get("active_session"),
+        })
+    return jsonify({"sessions": sessions, "active": memory.data.get("active_session")})
+
+
+@app.route("/api/history/<sid>")
+def api_history_sid(sid):
+    s = memory.get_session(sid)
+    if not s:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify({"id": s["id"], "title": s["title"], "messages": s["messages"]})
+
+
+@app.route("/api/history/<sid>/delete", methods=["POST"])
+def api_history_delete(sid):
+    memory.delete_session(sid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/history/<sid>/messages/<mid>/delete", methods=["POST"])
+def api_message_delete(sid, mid):
+    ok = memory.delete_message(sid, mid)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/session/new", methods=["POST"])
+def api_session_new():
+    # a fresh chat must not keep waiting behind the previous chat's task
+    with TASKS_LOCK:
+        current = TASKS.get(CURRENT_TASK["id"])
+        if current and current.status in ("running", "paused", "queued"):
+            current.stop()
+        while QUEUE:
+            q = QUEUE.pop(0)
+            q.stop()
+        CURRENT_TASK["id"] = None
+    sid = memory.new_session()
+    return jsonify({"sessionId": sid})
+
+
+@app.route("/api/session/<sid>/activate", methods=["POST"])
+def api_session_activate(sid):
+    ok = memory.set_active_session(sid)
+    return jsonify({"ok": ok})
+
+
+# -------------------------------------------------------------- projects
 @app.route("/api/projects")
 def api_projects():
     out = []
@@ -230,26 +386,8 @@ def api_projects():
                 with open(meta_path, "r", encoding="utf-8") as f:
                     import json as _json
                     meta = _json.load(f)
-                out.append({"id": meta.get("id", name), "name": meta.get("name", name), "type": meta.get("type_fa", "")})
+                out.append({"id": meta.get("id", name), "name": meta.get("name", name),
+                            "type": meta.get("type_fa", ""), "root": os.path.join(PROJECTS_DIR, name)})
             except Exception:
                 pass
     return jsonify({"projects": out})
-
-
-@app.route("/preview/<pid>/")
-def preview_index(pid):
-    root = os.path.join(PROJECTS_DIR, pid)
-    if not os.path.isdir(root):
-        return "پروژه پیدا نشد", 404
-    return send_from_directory(root, "index.html")
-
-
-@app.route("/preview/<pid>/<path:rest>")
-def preview_file(pid, rest):
-    root = os.path.join(PROJECTS_DIR, pid)
-    if not os.path.isdir(root):
-        return "پروژه پیدا نشد", 404
-    try:
-        return send_from_directory(root, rest)
-    except Exception:
-        return "فایل پیدا نشد", 404
