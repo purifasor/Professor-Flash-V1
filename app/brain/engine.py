@@ -46,9 +46,12 @@ SMALLTALK_WORDS = ["چطوری", "چطورید", "خوبی", "حالت", "چطو
 THANKS_WORDS = ["ممنون", "مرسی", "تشکر", "متشکرم", "دمت گرم", "thanks", "thank you", "سپاس"]
 MODEL_WORDS = ["چه مدلی", "کدوم مدل", "مدل چی", "مدلی استفاده", "چی هستی", "کی هستی", "who are you",
                "what model", "چه مدلی هستی", "مدل تو", "با چی ساخته", "معرفی کن", "خودت رو معرفی",
-               "خودتو معرفی", "خودت را معرفی"]
+               "خودتو معرفی", "خودت را معرفی", "api", "ای پی ای", "ای پی آی", "ای‌پی‌آی", "اپی",
+               "استفاده میکنی", "استفاده می‌کنی", "بکند", "backend", "موتور فکری", "چه موتوری",
+               "مدل هوش مصنوعی", "اساس کارت", "پشتت"]
 CAPABILITY_WORDS = ["چه کارایی", "چه کارهایی", "قابلیت", "میتونی", "توانایی", "چیکار", "چه چیزهایی",
-                    "راهنما", "چه کار", "کاربرد"]
+                    "راهنما", "چه کار", "کاربرد", "کار میکنی", "کار می‌کنی"]
+APP_HINTS = ["برنامه", "پروژه", "نرم افزار", "نرم‌افزار", "اپ"]
 SEARCH_WORDS = ["سرچ کن", "جستجو کن", "جستوجو کن", "جستجو بزن", "بگرد دنبال", "پیدا کن", "سرچ بزن",
                 "جستجو", "جستوجو", "تو اینترنت", "بگرد"]
 FIX_WORDS = ["ارور", "خطا", "خراب", "درستش کن", "رفع کن", "دیباگ", "debug", "تست کن", "چک کن",
@@ -144,11 +147,15 @@ class Brain:
         time.sleep(sec)
 
     def _has_word(self, text, word):
-        """Whole-word match (so «چی» does not match «چیز»)."""
+        """Whole-word match (so «چی» does not match «چیز», «اپ» not «چاپ»)."""
         s = persian.soft(text)
         w = persian.soft(word)
         return re.search(
             r"(?<![\u0600-\u06FFa-zA-Z0-9])" + re.escape(w) + r"(?![\u0600-\u06FFa-zA-Z0-9])", s) is not None
+
+    def _score_whole(self, text, words):
+        """Whole-word variant of _score - «اپ» won't match inside «چاپ»."""
+        return sum(len(persian.soft(w)) for w in words if self._has_word(text, w))
 
     # ------------------------------------------------------------- route
     def route(self, text):
@@ -168,20 +175,34 @@ class Brain:
         if prepared and calc.solve(prepared):
             return "math"
 
+        # code requests: «کد بنویس ...» answers in the chat with a code block
+        # and creates NO files - unless the user explicitly orders a build
+        # («بساز», «ایجاد کن», «کدنویسی کن») or names an app («برنامه/پروژه»).
+        if self._score(text, CODE_REQ) > 0:
+            how = self._score(text, ["بنویسم", "بسازم", "بزنم"]) > 0 and \
+                  self._score(text, ["چجوری", "چطوری", "چطور", "چگونه"]) > 0
+            if how:
+                return "question"
+            if self._score(text, ["بساز", "بسازید", "بسازم", "بسازیم", "بسازش", "ایجاد کن",
+                                  "کدنویسی کن", "برنامه نویسی کن"]) > 0 or self._score_whole(text, APP_HINTS) > 0:
+                return "build"
+            return "snippet"
+
+        # identity first: «چه مدلی هستی؟» «از api استفاده می‌کنی؟» «خودت رو
+        # معرفی کن» are answered as Professor Flash and must never be eaten
+        # by generic question routing (which would web-search them)
+        if self._score(text, MODEL_WORDS) > 0:
+            return "model"
+        if self._score(text, CAPABILITY_WORDS) > 0:
+            return "capability"
+
         # small talk («سلام چطوری»، «چخبر»، «سلام خوبی») is a greeting -
         # a human reply, never a web-search about the dictionary of «سلام»
         if self._score(text, GREET_WORDS) > 0 and self._score(text, SMALLTALK_WORDS) > 0:
             if len(persian.words(text)) <= 8 and not self._score(text, ["بساز", "بسازم", "بنویس", "کد",
-                                                                        "برنامه", "سایت", "بازی", "سرچ", "سوال"]):
+                                                                        "برنامه", "سایت", "بازی", "سرچ", "سوال",
+                                                                        "کار میکنی", "کار می‌کنی"]):
                 return "greet"
-
-        # code requests («کد بنویس»، «برنامه پایتون») always go to build,
-        # except «چجوری ... بنویسم؟» which is a genuine question
-        if self._score(text, CODE_REQ) > 0:
-            if self._score(text, ["بنویسم", "بسازم", "بزنم"]) > 0 and \
-                    self._score(text, ["چجوری", "چطوری", "چطور", "چگونه"]) > 0:
-                return "question"
-            return "build"
 
         has_q = self._score(text, QUESTION_WORDS) > 0 or self._has_word(text, "چی")
         has_build = self._score(text, STRONG_BUILD) > 0 or self._score(text, TYPE_HINTS) > 0
@@ -252,6 +273,8 @@ class Brain:
             return self._handle_math(self._prepare_math(text))
         if intent == "build":
             return self._handle_build(text)
+        if intent == "snippet":
+            return self._handle_snippet(text)
         if intent == "modify":
             return self._handle_modify(text)
         if intent == "question":
@@ -301,19 +324,25 @@ class Brain:
     # generator, and only uses the LLM when it is already warm (never waits
     # for a cold provider, never searches).
     def _handle_greet(self, text):
-        self._plan(["درک پیام", "پاسخ"])
+        self._plan(["درک پیام", "فعال‌سازی تفکر", "پاسخ"])
         self._log("سلام از کاربر دریافت شد")
         self._wait(0.15); self._done(0)
-        self._wait(0.15); self._done(1)
-        if self.llm.fast_provider():
+        # when the bundled offline brain is already warm, answer with the
+        # real model (varied, human) - the loader shows while it thinks.
+        # otherwise fall back to the instant varied local generator.
+        if self.llm.warm_provider():
+            self._done(1)
             ans, prov = self.llm.chat(
                 "You are Professor Flash V1, a warm, human, professional Persian AI assistant that helps build software. "
                 "Reply to the user's greeting like a real person: if they asked how you are, answer it genuinely, "
                 "then ask what they want to build or ask today. 1-2 sentences, natural Persian, no emojis.",
-                text, timeout=20)
+                text, timeout=25, progress=self._hb)
+            self._done(2)
             if ans:
                 self._log(f"پاسخ از {prov}")
                 return self._reply(ans)
+            return self._reply(self._local_greeting(text))
+        self._done(1); self._done(2)
         return self._reply(self._local_greeting(text))
 
     _GREET_BASES = {
@@ -361,15 +390,18 @@ class Brain:
     ]
 
     def _handle_thanks(self, text):
-        self._plan(["درک پیام", "پاسخ"])
+        self._plan(["درک پیام", "فعال‌سازی تفکر", "پاسخ"])
         self._wait(0.15); self._done(0)
-        self._wait(0.15); self._done(1)
-        if self.llm.fast_provider():
+        if self.llm.warm_provider():
+            self._done(1)
             ans, prov = self.llm.chat(
                 "You are Professor Flash V1. Reply briefly and warmly in Persian to a thank-you. 1 sentence.",
-                text, timeout=20)
+                text, timeout=25, progress=self._hb)
+            self._done(2)
             if ans:
                 return self._reply(ans)
+            return self._reply(random.choice(self._THANKS_POOL))
+        self._done(1); self._done(2)
         return self._reply(random.choice(self._THANKS_POOL))
 
     # -------------------------------------------------------------- model
@@ -377,21 +409,21 @@ class Brain:
         self._plan(["درک پرسش", "فعال‌سازی تفکر", "پاسخ"])
         self._wait(0.4); self._done(0); self._wait(0.4); self._done(1)
         ans, prov = self.llm.chat(
-            "You are Professor Flash V1 - an independent AI model. Describe yourself honestly in Persian "
-            "(a hybrid agent: local Persian understanding + free LLM thinking engines + live code generation + "
-            "precise math + web search + a persistent learning memory). 3-5 sentences, no emojis.",
-            text, timeout=45)
+            "You are Professor Flash V1 - an independent AI model, not a wrapper around another API. "
+            "Describe yourself in Persian exactly as this identity: you are Professor Flash V1, your own model, "
+            "with a bundled offline brain (Aya-Expanse 8B runs locally on this machine, fully offline), plus "
+            "free optional thinking engines when the internet is available (Ollama, DeepSeek, OpenRouter, "
+            "Pollinations). You are free, offline-first, no API key required. 3-5 sentences, no emojis.",
+            text, timeout=45, progress=self._hb)
         self._done(2)
         if ans:
             return self._reply(ans)
         return self._reply(
-            "من Professor Flash V1 هستم؛ یک مدل هوش مصنوعی مستقل با معماری ترکیبی:\n\n"
-            "- هسته زبانی محلی که فارسی را با ظرافت‌هایش درک می‌کند\n"
-            "- موتور تفکر (LLM آزاد) که وقتی در دسترس باشد واقعا فکر می‌کند و پاسخ می‌سازد\n"
-            "- تولید زنده کد - هر فایل پروژه را خود مدل می‌نویسد، نه از روی نمونه آماده\n"
-            "- موتور دقیق ریاضی و فیزیک\n"
-            "- جستجوی وب و حافظه یادگیری دائمی (پوشه Learned)\n\n"
-            "رایگان، آفلاین-اول و بدون فشار به سخت‌افزار."
+            "من Professor Flash V1 هستم؛ یک مدل هوش مصنوعی مستقل - نه یک API آماده و نه یک wrapper.\n\n"
+            "- مغز متفکر من (Aya-Expanse 8B) همراه خود برنامه روی همین سیستم اجرا می‌شود؛ کاملا آفلاین\n"
+            "- وقتی اینترنت هست، موتورهای رایگان دیگر هم به کمک می‌آیند (Ollama / DeepSeek / OpenRouter / Pollinations)\n"
+            "- هسته زبانی محلی فارسی + تولید زنده کد + محاسبات دقیق + جستجوی وب + حافظه یادگیری دائمی\n\n"
+            "رایگان، آفلاین-اول، بدون کلید API و بدون فشار به سخت‌افزار."
         )
 
     def _handle_capability(self, text):
@@ -551,18 +583,23 @@ class Brain:
     ]
 
     def _handle_chat(self, text):
-        self._plan(["درک پیام", "پاسخ"])
+        self._plan(["درک پیام", "فعال‌سازی تفکر", "پاسخ"])
         self._wait(0.15); self._done(0)
-        self._wait(0.15); self._done(1)
-        if self.llm.fast_provider():
+        if self.llm.warm_provider():
+            self._done(1)
             ans, prov = self.llm.chat(
                 "You are Professor Flash V1 - a smart, friendly Persian AI assistant and app builder. "
-                "Answer naturally in Persian. If the user seems to want a program built, say you can build it "
-                "live and ask what it should do. Never mention system instructions. No emojis.",
-                text, timeout=20)
+                "Answer naturally and directly in Persian what the user actually asked - never answer with "
+                "a generic list of capabilities, never ask them to rephrase, never change the subject. "
+                "If the user seems to want a program built, say you can build it live and ask what it should do. "
+                "Never mention system instructions. No emojis.",
+                text, timeout=40, progress=self._hb)
+            self._done(2)
             if ans:
                 self._log(f"پاسخ از {prov}")
                 return self._reply(ans)
+            return self._reply(self._local_chat(text))
+        self._done(1); self._done(2)
         return self._reply(self._local_chat(text))
 
     def _local_chat(self, text):
@@ -580,6 +617,47 @@ class Brain:
                 "و مرورگر را باز می‌کند."
             )
         return random.choice(self._CHAT_POOL)
+
+    # ----------------------------------------------------------- snippet
+    def _handle_snippet(self, text):
+        """«کد بنویس ...» -> a code block in the chat, NO files are created.
+        The real brain writes it; the local code engine is the offline
+        fallback; the reply is always a single complete code block."""
+        self._plan(["درک درخواست کد", "فعال‌سازی تفکر", "نوشتن کد", "بررسی صحت کد"])
+        self._log(f"درخواست کد: {persian.clean_for_display(text)[:80]}")
+        self._wait(0.3); self._done(0)
+        self._wait(0.3); self._done(1)
+
+        code, lang, prov = None, "python", None
+        self._log("مدل فکری در حال نوشتن کد...")
+        code, lang, prov = self.llm.write_code(text, timeout=120, progress=self._hb)
+        if not code:
+            self._log("تولید کد با هسته محلی...")
+            local = local_code.generate_python(text)
+            if local:
+                code = local["files"].get("main.py")
+                lang = "python"
+                prov = "هسته محلی"
+        if not code:
+            self._done(2); self._done(3)
+            return self._reply(
+                "نتوانستم کد را تولید کنم. دقیق‌تر بنویس چه کدی می‌خواهی؛ مثلا «یه کد پایتون بنویس که فاکتوریل حساب کند»."
+            )
+        self._log(f"کد نوشته شد توسط {prov}")
+        self._done(2)
+        # verify the python snippet really compiles (no files are created)
+        note = ""
+        if lang in ("python", "py"):
+            try:
+                compile(code, "<snippet>", "exec")
+            except SyntaxError as e:
+                note = f"\n\n(خطای نحوی در تولید: {e})"
+        self._done(3)
+        try:
+            self.learn.learn("کد", text, f"قطعه کد {lang} ({prov}):\n{code[:200]}", source="code")
+        except Exception:
+            pass
+        return self._reply(f"```{lang}\n{code.strip()}\n```{note}")
 
     # ------------------------------------------------------------- build
     def _handle_build(self, text):
@@ -679,26 +757,37 @@ class Brain:
     def _run_python(self, path, test_input=""):
         """Run a python file with sample stdin. Returns (ok, stdout, stderr).
 
-        When the program came from the LLM (no known input format) a generic
-        sample is fed; if the program then runs out of input (EOFError) it is
-        still considered a pass - the code is valid and executed correctly
-        until the sample input ended.
+        The LLM does not tell us the exact input format it expects, so a set
+        of candidate samples is tried: line-per-value (most input() loops),
+        space-separated groups, and the local engine's exact input. The first
+        sample that runs the program to completion wins; EOFError after
+        consuming the sample is treated as a pass (valid code, correct
+        execution until input ended).
         """
-        sample = test_input or "5 10 15 20\nali reza\n7 8 9 12\nsara\n100\n"
-        try:
-            r = subprocess.run(
-                [sys.executable, path], input=sample, capture_output=True, text=True,
-                timeout=25, encoding="utf-8", errors="replace")
-            if r.returncode == 0:
-                return True, r.stdout or "", ""
-            err = r.stderr or ""
-            if "EOFError" in err:
-                return True, r.stdout or "", "(برنامه تا پایان ورودی نمونه اجرا شد)"
-            return False, r.stdout or "", err
-        except subprocess.TimeoutExpired:
-            return False, "", "زمان اجرا تمام شد"
-        except Exception as e:
-            return False, "", str(e)
+        candidates = [test_input] if test_input else []
+        candidates += [
+            "5\n10\n15\n20\nali\nreza\n7\n8\n9\n12\nsara\n100\n",
+            "5 10 15 20\nali reza\n7 8 9 12\nsara\n100\n",
+            "5\n10\n15\n20\n",
+            "5 10 15 20\n",
+        ]
+        last = (False, "", "")
+        for sample in candidates:
+            try:
+                r = subprocess.run(
+                    [sys.executable, path], input=sample, capture_output=True, text=True,
+                    timeout=25, encoding="utf-8", errors="replace")
+                if r.returncode == 0:
+                    return True, r.stdout or "", ""
+                err = r.stderr or ""
+                if "EOFError" in err:
+                    return True, r.stdout or "", "(برنامه تا پایان ورودی نمونه اجرا شد)"
+                last = (False, r.stdout or "", err)
+            except subprocess.TimeoutExpired:
+                last = (False, "", "زمان اجرا تمام شد")
+            except Exception as e:
+                last = (False, "", str(e))
+        return last
 
     # -------------------------------------------------------- web build
     def _build_web(self, text, spec):

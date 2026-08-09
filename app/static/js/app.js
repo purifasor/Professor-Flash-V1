@@ -7,6 +7,7 @@ const state = {
   taskId: null,
   pollTimer: null,
   busy: false,
+  todoShown: false,
 };
 
 /* ------------------------------------------------------------ helpers */
@@ -149,10 +150,18 @@ function thinkingBubble() {
   return wrap;
 }
 
+const THINK_MSGS = [
+  "در حال تفکر...", "در حال تحلیل...", "در حال جستجو در دانش...", "در حال ساختن پاسخ...",
+];
+let thinkTick = 0;
 function updateThinking() {
   // the chat shows only a loader; details live in the sandbox panel
   const el = $("thinking");
-  if (el) el.querySelector(".think-text").textContent = "در حال فکر کردن...";
+  if (el) {
+    const m = THINK_MSGS[thinkTick % THINK_MSGS.length];
+    el.querySelector(".think-text").textContent = m;
+    thinkTick++;
+  }
 }
 
 function removeThinking() {
@@ -230,6 +239,14 @@ async function pollTask(tid) {
     if (t.todos) renderTodos(t.todos);
     if (t.files) renderFiles(t.files);
 
+    // announce the work plan as a chat message the first time a build task
+    // shows its Todo list (like other AI agents do before creating files)
+    if (t.todos && t.todos.length && !state.todoShown && state.taskId === tid) {
+      state.todoShown = true;
+      const list = t.todos.map((x, i) => `${i + 1}. ${x.text}`).join("\n");
+      addNote("برنامه کار:\n" + list);
+    }
+
     if (t.status === "running" || t.status === "queued" || t.status === "paused") {
       updateThinking();
       controlsEl.hidden = false;
@@ -283,6 +300,8 @@ async function send(text) {
   text = (text || "").trim();
   if (!text || state.busy) return;
   state.busy = true;
+  state.todoShown = false;
+  thinkTick = 0;
 
   addMessage("user", text, null);
   heroEl.classList.remove("show");
@@ -442,10 +461,10 @@ $("btnNewSession").addEventListener("click", async () => {
   const r = await fetch("/api/session/new", { method: "POST" });
   const d = await r.json();
   state.sessionId = d.sessionId;
+  state.todoShown = false;
   chatEl.innerHTML = "";
   heroEl.classList.add("show");
   renderTodos([]);
-  renderLogs([]);
   renderFiles([]);
   setTaskStatus(null);
   await loadSessions();
