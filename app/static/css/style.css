@@ -142,8 +142,10 @@ body::before {
 .chip-path { direction: ltr; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 
 /* -------------------------------------------------------------- chat */
-.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
-.chat { max-width: 860px; margin: 0 auto; padding: 22px 24px 10px; display: flex; flex-direction: column; gap: 16px; }
+/* The app is RTL, but the scrollbar must sit on the RIGHT: the scroll
+   container is forced LTR while its inner content stays RTL. */
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; direction: ltr; }
+.chat { max-width: 860px; margin: 0 auto; padding: 22px 24px 10px; display: flex; flex-direction: column; gap: 16px; direction: rtl; }
 
 .msg { display: flex; gap: 10px; animation: rise .25s ease; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -188,9 +190,12 @@ body::before {
 .msg .actions button svg { width: 12px; height: 12px; }
 
 /* code blocks inside messages */
+.code-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 6px 0 0;
+}
 .code-label {
   display: inline-block;
-  margin: 6px 0 4px;
   font-size: 10.5px;
   font-weight: 700;
   color: var(--accent-2);
@@ -201,6 +206,15 @@ body::before {
   font-family: var(--font);
   direction: ltr;
 }
+.code-copy {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--line-2);
+  color: var(--muted); border-radius: 6px;
+  padding: 2px 8px; cursor: pointer; font-family: var(--font); font-size: 10.5px;
+  direction: ltr;
+}
+.code-copy:hover { color: var(--text); background: rgba(255,255,255,.12); }
+.code-copy svg { width: 11px; height: 11px; }
 .code-block {
   direction: ltr;
   text-align: left;
@@ -209,7 +223,7 @@ body::before {
   border-left: 3px solid var(--accent);
   border-radius: 10px;
   padding: 12px 14px;
-  margin: 6px 0;
+  margin: 0 0 6px;
   overflow-x: auto;
   font-family: Consolas, "Cascadia Code", Menlo, "Courier New", monospace;
   font-size: 12.5px;

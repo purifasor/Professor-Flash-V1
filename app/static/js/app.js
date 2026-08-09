@@ -20,6 +20,7 @@ function renderContent(text) {
   const parts = String(text).split(/```/);
   if (parts.length === 1) return esc(text);
   let html = "";
+  let codeId = 0;
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
     if (i % 2 === 0) {
@@ -33,11 +34,28 @@ function renderContent(text) {
         lang = first;
         code = nl === -1 ? "" : p.slice(nl + 1);
       }
-      html += (lang ? `<div class="code-label">${esc(lang)}</div>` : "");
-      html += `<pre class="code-block"><code>${esc(code)}</code></pre>`;
+      const id = "code-" + (++codeId) + "-" + Math.random().toString(36).slice(2, 7);
+      html += `<div class="code-head">`;
+      html += (lang ? `<span class="code-label">${esc(lang)}</span>` : `<span></span>`);
+      html += `<button class="code-copy" data-code="${id}" title="کپی فقط کد">${icon("copy")}<span>کپی کد</span></button>`;
+      html += `</div>`;
+      html += `<pre class="code-block" data-code-body="${id}"><code>${esc(code)}</code></pre>`;
     }
   }
   return html;
+}
+
+async function copyText(txt) {
+  try {
+    await navigator.clipboard.writeText(txt);
+  } catch (err) {
+    const ta = document.createElement("textarea");
+    ta.value = txt;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
 }
 
 function timeAgo(ts) {
@@ -351,18 +369,17 @@ chatEl.addEventListener("click", async (e) => {
   const mid = wrap.dataset.mid;
   if (!mid) return;
 
+  if (e.target.closest(".code-copy")) {
+    const btn = e.target.closest(".code-copy");
+    const body = document.querySelector(`pre[data-code-body="${btn.dataset.code}"]`);
+    if (body) await copyText(body.textContent);
+    addNote("کد کپی شد.");
+    return;
+  }
+
   if (e.target.closest(".act-copy")) {
     const text = wrap.dataset.raw || bubble.textContent;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
+    await copyText(text);
     addNote("کپی شد.");
     return;
   }

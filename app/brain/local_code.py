@@ -489,6 +489,12 @@ def generate_web(text):
     elif op == "countdown":
         inputs = '<input type="number" id="n0" placeholder="از چند شروع شود؟">'
         js = ("function calc(){const n=parseInt(document.getElementById('n0').value);if(isNaN(n)){document.getElementById('out').textContent='عدد وارد کن';return;}let out='';for(let i=n;i>=1;i--)out+=i+' ... ';out+='شروع!';document.getElementById('out').textContent=out;}")
+    elif op == "calculator":
+        inputs = '<div class="calc-disp" id="disp">0</div><div class="calc-grid" id="calcGrid"></div>'
+        js = ("const btns=['7','8','9','÷','4','5','6','×','1','2','3','−','0','.','C','=','+'];let expr='';const grid=document.getElementById('calcGrid');btns.forEach(b=>{const el=document.createElement('button');el.textContent=b;el.onclick=()=>{const d=document.getElementById('disp');if(b==='C'){expr='';d.textContent='0';return;}if(b==='='){try{d.textContent=Function('return ('+expr+')')();expr=String(d.textContent);}catch(e){d.textContent='خطا';expr='';}return;}expr+=b==='÷'?'/':b==='×'?'*':b==='−'?'-':b;d.textContent=expr||'0';};grid.appendChild(el);});document.getElementById('disp').textContent='0';")
+    elif op == "guess":
+        inputs = '<input type="number" id="n0" placeholder="حدس تو (۱ تا ۲۰)"><button class="calc-btn" onclick="guess()">حدس بزن</button>'
+        js = ("let target=Math.floor(Math.random()*20)+1,chances=5;const el=document.getElementById('n0'),out=document.getElementById('out');out.textContent='یک عدد ۱ تا ۲۰ حدس بزن ('+chances+' شانس).';window.guess=()=>{const g=parseInt(el.value);if(isNaN(g)){out.textContent='عدد وارد کن';return;}chances--;if(g===target){out.textContent='آفرین، درست حدس زدی! عدد '+target+' بود.';el.disabled=true;}else if(chances<=0){out.textContent='متاسفم! عدد '+target+' بود.';el.disabled=true;}else{out.textContent=(g<target?'بزرگ‌تر بگو':'کوچک‌تر بگو')+' ('+chances+' شانس مانده).'};}")
     elif op == "temp":
         inputs = '<input type="number" id="n0" placeholder="مقدار دما">'
         js = ("function calc(){const v=parseFloat(document.getElementById('n0').value);if(isNaN(v)){document.getElementById('out').textContent='عدد وارد کن';return;}const f=v*9/5+32,c=(v-32)*5/9;document.getElementById('out').textContent=v+' سانتی‌گراد = '+f.toFixed(2)+' فارنهایت | '+v+' فارنهایت = '+c.toFixed(2)+' سانتی‌گراد';}")
@@ -524,6 +530,14 @@ def generate_web(text):
   button:hover {{ filter:brightness(1.15); }}
   .out {{ margin-top:16px; padding:14px; border-radius:10px; background:#11141d; border:1px solid rgba(6,182,212,.25);
           color:#06b6d4; font-size:16px; font-weight:700; min-height:22px; }}
+  .calc-disp {{ background:#07080d; border:1px solid rgba(124,58,237,.5); border-radius:10px; padding:14px;
+               color:#e8eaf0; font-size:26px; font-weight:700; text-align:left; direction:ltr;
+               font-family:Consolas,monospace; margin-bottom:10px; min-height:26px; word-break:break-all; }}
+  .calc-grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }}
+  .calc-grid button {{ margin:0; padding:13px 0; background:#11141d; border:1px solid rgba(255,255,255,.1); font-size:17px; }}
+  .calc-grid button:nth-child(4n) {{ background:rgba(124,58,237,.28); border-color:rgba(124,58,237,.5); }}
+  .calc-grid button:last-child {{ background:linear-gradient(135deg,#7c3aed,#06b6d4); border:none; }}
+  .calc-btn {{ margin:7px 0 0; }}
 </style>
 </head>
 <body>

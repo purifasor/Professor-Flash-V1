@@ -63,6 +63,7 @@ def _is_control(message, words):
 
 def _start_task(task):
     task.started_at = time.time()
+    task.last_activity = task.started_at
     task.thread = threading.Thread(target=_run_task, args=(task,), daemon=True)
     task.thread.start()
 
@@ -94,23 +95,30 @@ def _run_task(task):
 
 
 def _watchdog():
-    """Safety net: no task may run forever. Force-completes stuck tasks."""
+    """Safety net: no task may run forever. A task is force-completed only
+    when it is genuinely stuck - running past the hard cap (10 min, enough
+    for slow local-brain generations) OR silent for 150s with no progress.
+    The local brain streams tokens, so a live generation always refreshes
+    last_activity and is never killed mid-thought."""
     while True:
         time.sleep(5)
         now = time.time()
         force = False
         with TASKS_LOCK:
             for t in list(TASKS.values()):
-                if t.status == "running" and t.started_at and now - t.started_at > 120:
-                    t._stop_evt.set()
-                    t._pause_evt.set()
-                    t.status = "done"
-                    t.reply = ("پاسخ در زمان مجاز آماده نشد (اینترنت یا مدل محلی در دسترس نبود). "
-                               "دوباره تلاش کن.")
-                    if t.sid and not t.assistant_saved:
-                        memory.add_message(t.sid, "assistant", t.reply)
-                        t.assistant_saved = True
-                    force = True
+                if t.status == "running" and t.started_at:
+                    age = now - t.started_at
+                    idle = now - (t.last_activity or t.started_at)
+                    if age > 600 or (age > 60 and idle > 150):
+                        t._stop_evt.set()
+                        t._pause_evt.set()
+                        t.status = "done"
+                        t.reply = ("پاسخ در زمان مجاز آماده نشد (اینترنت یا مدل محلی در دسترس نبود). "
+                                   "دوباره تلاش کن.")
+                        if t.sid and not t.assistant_saved:
+                            memory.add_message(t.sid, "assistant", t.reply)
+                            t.assistant_saved = True
+                        force = True
         if force:
             _process_queue()
 
@@ -157,6 +165,7 @@ class Task:
         self.root = None
         self.error = None
         self.started_at = None
+        self.last_activity = None
         self.assistant_saved = False
         self._pause_evt = threading.Event()
         self._pause_evt.set()
@@ -186,6 +195,8 @@ class Task:
             if self._stop_evt.is_set():
                 raise TaskStopped()
             time.sleep(0.08)
+
+        self.last_activity = time.time()
 
         if kind == "plan":
             self.todos = [{"text": t, "done": False} for t in payload]

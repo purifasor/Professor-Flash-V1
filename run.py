@@ -132,6 +132,13 @@ def detect_tools():
         log("OpenRouter API key found (موتور فکری آنلاین)")
     else:
         log("OPENROUTER_API_KEY not set (اختیاری)")
+    bundled_exe = os.path.join(PROJECT_DIR, "engine", "llama", "llama-server.exe")
+    if os.path.exists(bundled_exe):
+        has_model = any(f.endswith(".gguf") for f in os.listdir(os.path.join(PROJECT_DIR, "models")) if os.path.isdir(os.path.join(PROJECT_DIR, "models")))
+        if has_model:
+            log("Bundled brain present (Aya-Expanse - engine/llama + models/) - کاملا آفلاین")
+        else:
+            log("Bundled engine present but model missing - run download_model.py")
     log("Pollinations: موتور رایگان بدون کلید - در صورت در دسترس بودن به‌کار می‌رود")
     return info
 
@@ -146,6 +153,77 @@ def open_browser(url):
         except Exception:
             pass
     threading.Thread(target=_open, daemon=True).start()
+
+
+# ------------------------------------------------------------------ brain
+_LLAMA_PROC = {"proc": None}
+
+
+def start_bundled_brain():
+    """Start the bundled llama-server (engine/llama) with the model in
+    models/ if both exist. Runs in a background thread so the web UI still
+    comes up instantly; the model answers as soon as it has loaded.
+    Returns nothing (threaded).
+    """
+    exe = os.path.join(PROJECT_DIR, "engine", "llama", "llama-server.exe")
+    if not os.path.exists(exe):
+        return
+    ggu = None
+    models_dir = os.path.join(PROJECT_DIR, "models")
+    if os.path.isdir(models_dir):
+        for f in sorted(os.listdir(models_dir)):
+            if f.endswith(".gguf"):
+                p = os.path.join(models_dir, f)
+                # skip a still-downloading (partial) file
+                if os.path.getsize(p) > 50 * 1024 * 1024 and time.time() - os.path.getmtime(p) > 60:
+                    ggu = p
+                    break
+    if not ggu:
+        log("Model not found in models/ - run download_model.py to enable the real local brain")
+        return
+    port = 8081
+    cmd = [exe, "-m", ggu, "-c", "4096", "--host", "127.0.0.1", "--port", str(port),
+           "-t", "4", "--no-webui"]
+    flags = 0
+    if os.name == "nt":
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                creationflags=flags)
+    except Exception as exc:
+        warn(f"Could not start bundled brain: {exc}")
+        return
+    _LLAMA_PROC["proc"] = proc
+    log(f"Bundled brain loading ({os.path.basename(ggu)}) on 127.0.0.1:{port} ...")
+    import urllib.request
+    for _ in range(120):
+        if proc.poll() is not None:
+            warn("Bundled brain exited unexpectedly; continuing without it.")
+            return
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=1):
+                log("Bundled brain ready (Aya-Expanse 8B - کاملا آفلاین و رایگان)")
+                return
+        except Exception:
+            time.sleep(0.5)
+    warn("Bundled brain took too long to load; continuing without it.")
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def stop_bundled_brain():
+    proc = _LLAMA_PROC.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 
 def main():
@@ -178,6 +256,7 @@ def main():
         warn("Some packages could not be installed; continuing anyway.")
 
     detect_tools()
+    threading.Thread(target=start_bundled_brain, daemon=True).start()
 
     port = find_free_port(PORT)
     url = f"http://{HOST}:{port}"
@@ -220,6 +299,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n[+] Shutting down. Goodbye!")
+        stop_bundled_brain()
         os._exit(0)
 
 

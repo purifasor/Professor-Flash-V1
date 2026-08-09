@@ -7,4 +7,6 @@ dist/
 memory.json
 projects/
 Learned/
+engine/
+models/
 *.log
