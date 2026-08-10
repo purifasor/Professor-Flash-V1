@@ -542,3 +542,23 @@ body::before {
   .sidebar { display: none; }
   .msg .bubble { max-width: 92%; }
 }
+
+/* cloud build delivery: zip download button */
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 2px;
+  padding: 9px 16px;
+  border: 1px solid var(--acc, #00e5ff);
+  border-radius: 10px;
+  color: var(--acc, #00e5ff);
+  background: rgba(0, 229, 255, 0.08);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+.dl-btn:hover { background: rgba(0, 229, 255, 0.18); transform: translateY(-1px); }
+.dl-btn svg { width: 15px; height: 15px; }

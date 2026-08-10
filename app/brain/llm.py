@@ -26,6 +26,8 @@ import threading
 import time
 import urllib.request
 
+from . import brain_server
+
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -115,6 +117,10 @@ def _llama_models():
     now = time.monotonic()
     if _llama_cache["models"] is not None and now - _llama_cache["at"] < 15:
         return _llama_cache["models"]
+    if not brain_server.is_running():
+        _llama_cache["models"] = []
+        _llama_cache["at"] = now
+        return []
     try:
         base = LLAMA_URL.rsplit("/v1/", 1)[0]
         with urllib.request.urlopen(base + "/v1/models", timeout=2) as r:
@@ -137,13 +143,14 @@ def _llama_chat(messages, timeout=180, on_progress=None):
     models = _llama_models()
     if not models:
         return None
+    brain_server.touch()
     prompt = " ".join(str(m.get("content", "")) for m in messages)
     wants_code = any(w in prompt for w in ("main.py", "index.html", "style.css", "app.js", "FILE:", "JSON", "json", "```"))
     body = {
         "model": models[0],
         "messages": messages,
         "temperature": 0.5,
-        "max_tokens": 2048 if wants_code else 1024,
+        "max_tokens": 4096 if wants_code else 1024,
         "stream": True,
     }
     data = json.dumps(body).encode("utf-8")
@@ -299,10 +306,14 @@ class Llm:
         """Human description of the first provider that has answered OK.
 
         Only returns a provider that actually worked before - never probes,
-        so layer-1 (fast) messages stay instant.
+        so layer-1 (fast) messages stay instant. The bundled local brain
+        only counts when it is actually running (the idle timer unloads it,
+        and layer-1 must never restart the heavy model just for small talk).
         """
         for key, _, fa in _PROVIDERS:
             if _status[key].get("ok") is True:
+                if key == "llama_local" and not brain_server.is_running():
+                    continue
                 return fa
         return None
 
@@ -342,6 +353,13 @@ class Llm:
         messages = [{"role": "system", "content": system}]
         if user:
             messages.append({"role": "user", "content": user})
+
+        # the bundled offline brain is started lazily: deep tasks (questions,
+        # snippets, builds, skills) load it on demand; layer-1 small talk only
+        # ever uses it when it is already warm, so idle RAM stays free.
+        if not brain_server.is_running():
+            if brain_server.ensure(timeout=60):
+                _llama_cache["models"] = None  # force a fresh probe
 
         online = _net_ok()
         providers = {key: (fn, fa) for key, fn, fa in _PROVIDERS}
@@ -472,6 +490,7 @@ class Llm:
                 "- Use input() to read from the user and print() to show results\n"
                 "- Read Persian input and print Persian output naturally\n"
                 "- No placeholders, no TODO comments, no fake/stub logic\n"
+                "- No comments in the code unless the user explicitly asked for them\n"
                 "- The whole program in ONE piece\n\n"
                 "Output format (exactly):\n"
                 "FILE: main.py\n"
@@ -491,7 +510,12 @@ class Llm:
                 "- style.css: modern professional design matching the theme, responsive\n"
                 "- app.js: complete working logic, no placeholders, no TODO comments\n"
                 "- RTL layout with lang=\"fa\" and dir=\"rtl\"\n"
-                "- No external dependencies (no CDN libraries), everything self-contained\n"
+                "- No comments in the code unless the user explicitly asked for them\n"
+                "- Use the Vazirmatn font for Persian text (Google Fonts link, fallback Tahoma)\n"
+                "- Include SEO meta tags: title, description, viewport, og:title\n"
+                "- Professional design: dark theme by default, accent color, smooth animations\n"
+                "  (CSS transitions/keyframes), fully responsive (grid + media queries)\n"
+                "- No external dependencies except the font (no CDN libraries), self-contained\n"
                 "- Each file in ONE complete piece\n\n"
                 "Output format (exactly, three sections in this order):\n"
                 "FILE: index.html\n"
@@ -508,6 +532,10 @@ class Llm:
                 "```\n"
                 "Nothing else - no explanations, no extra text.\n"
             )
+        refs = spec.get("kb") or []
+        if refs:
+            user += "\n\nReference knowledge (apply it to the code):\n" + \
+                "\n\n".join(f"[{d['title']}]\n{d['body']}" for d in refs)
         text, prov = self.chat(system, user, timeout=timeout, progress=progress)
         if not text:
             return None, None, prov

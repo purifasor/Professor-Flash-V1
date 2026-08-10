@@ -18,6 +18,8 @@ Endpoints:
 The werkzeug access logger is silenced so the console stays clean.
 """
 
+import atexit
+import json as _json
 import logging
 import os
 import threading
@@ -29,7 +31,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from .brain.engine import Brain, TaskStopped
 from .brain.llm import Llm
 from .brain.memory import Memory
-from .brain import persian
+from .brain import brain_server, persian
 
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 logging.getLogger("flask").setLevel(logging.WARNING)
@@ -53,6 +55,10 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 memory = Memory(MEMORY_PATH)
 llm = Llm()
 
+# the bundled brain is owned by this server: it is loaded on demand and
+# unloaded after ~5 idle minutes (see brain_server); make sure it dies with us
+atexit.register(brain_server.stop)
+
 from .brain.engine import STOP_WORDS, PAUSE_WORDS, RESUME_WORDS
 
 
@@ -66,10 +72,12 @@ def _start_task(task):
     task.last_activity = task.started_at
     task.thread = threading.Thread(target=_run_task, args=(task,), daemon=True)
     task.thread.start()
+    brain_server.touch()  # the brain may be needed - keep it alive during tasks
 
 
 def _run_task(task):
-    brain = Brain(memory, PROJECTS_DIR, emit=task.emit, llm=llm)
+    brain = Brain(memory, PROJECTS_DIR, emit=task.emit, llm=llm,
+                  mode=task.mode, agent=task.agent)
     try:
         result = brain.think(task.message)
         task.reply = result.get("reply")
@@ -126,19 +134,6 @@ def _watchdog():
 threading.Thread(target=_watchdog, daemon=True).start()
 
 
-def _warmup():
-    """Resolve provider state in the background so the first question/build
-    does not pay the cold-chain cost. Layer-1 messages never wait for it."""
-    time.sleep(4)
-    try:
-        llm.chat("You are a tiny warm-up probe. Reply with exactly: OK", "", timeout=20)
-    except Exception:
-        pass
-
-
-threading.Thread(target=_warmup, daemon=True).start()
-
-
 def _process_queue():
     with TASKS_LOCK:
         while QUEUE:
@@ -152,10 +147,12 @@ def _process_queue():
 
 
 class Task:
-    def __init__(self, tid, message, sid):
+    def __init__(self, tid, message, sid, mode="chat", agent=None):
         self.id = tid
         self.message = message
         self.sid = sid
+        self.mode = mode          # "chat" = text-only page, "agent" = full file builds
+        self.agent = agent        # agent settings {path, name}
         self.status = "running"  # running | queued | paused | done | stopped | error
         self.todos = []
         self.logs = []
@@ -183,6 +180,8 @@ class Task:
             self._pause_evt.set()
 
     def stop(self):
+        import traceback as _tb
+        print(f"[dbg] task {self.id} STOP called from {_tb.format_stack()[-2].strip()}", flush=True)
         self._stop_evt.set()
         self._pause_evt.set()
         if self.status in ("running", "paused", "queued"):
@@ -235,6 +234,11 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.route("/agent")
+def agent_page():
+    return send_from_directory(STATIC_DIR, "agent.html")
+
+
 @app.route("/api/model")
 def api_model():
     from . import __version__
@@ -271,6 +275,8 @@ def api_chat():
     if not message:
         return jsonify({"error": "پیام خالی است"}), 400
     sid = data.get("sessionId") or memory.data.get("active_session")
+    mode = data.get("mode") or "chat"
+    agent = data.get("project") or None
 
     memory.add_message(sid, "user", message)
 
@@ -295,7 +301,7 @@ def api_chat():
         # a task is running -> queue this message (never mix it into the build)
         if current and current.status in ("running", "paused"):
             tid = uuid.uuid4().hex[:10]
-            task = Task(tid, message, sid)
+            task = Task(tid, message, sid, mode=mode, agent=agent)
             task.status = "queued"
             TASKS[tid] = task
             QUEUE.append(task)
@@ -304,7 +310,7 @@ def api_chat():
 
         # start a fresh task
         tid = uuid.uuid4().hex[:10]
-        task = Task(tid, message, sid)
+        task = Task(tid, message, sid, mode=mode, agent=agent)
         TASKS[tid] = task
         CURRENT_TASK["id"] = tid
         _start_task(task)
@@ -380,15 +386,25 @@ def api_message_delete(sid, mid):
 
 @app.route("/api/session/new", methods=["POST"])
 def api_session_new():
-    # a fresh chat must not keep waiting behind the previous chat's task
+    # a fresh chat must not keep waiting behind the previous chat's task -
+    # but only tasks from the SAME page (chat vs agent) are stopped, so
+    # loading the chat page never kills an agent build that is running.
+    data = request.get_json(silent=True) or {}
+    scope = data.get("mode") or "chat"
     with TASKS_LOCK:
         current = TASKS.get(CURRENT_TASK["id"])
-        if current and current.status in ("running", "paused", "queued"):
+        if current and current.status in ("running", "paused", "queued") and current.mode == scope:
             current.stop()
+        kept = []
         while QUEUE:
             q = QUEUE.pop(0)
-            q.stop()
-        CURRENT_TASK["id"] = None
+            if q.mode == scope:
+                q.stop()
+            else:
+                kept.append(q)
+        QUEUE[:] = kept
+        if current and current.mode == scope:
+            CURRENT_TASK["id"] = None
     sid = memory.new_session()
     return jsonify({"sessionId": sid})
 
@@ -397,6 +413,70 @@ def api_session_new():
 def api_session_activate(sid):
     ok = memory.set_active_session(sid)
     return jsonify({"ok": ok})
+
+
+# ---------------------------------------------------------- agent config
+# The Agent tab has its own settings: project path + project name. When the
+# path points at an existing project the name is auto-detected from the
+# folder. These settings persist in memory.json so they survive restarts.
+
+DEFAULT_AGENT_ROOT = PROJECTS_DIR
+
+
+def _normalize_path(p):
+    p = (p or "").strip()
+    if not p:
+        return DEFAULT_AGENT_ROOT
+    p = os.path.expanduser(p)
+    if not os.path.isabs(p):
+        p = os.path.join(os.path.dirname(PROJECTS_DIR), p)
+    return os.path.abspath(p)
+
+
+@app.route("/api/agent/config")
+def api_agent_config():
+    cfg = memory.agent_config
+    path = _normalize_path(cfg.get("path"))
+    name = (cfg.get("name") or "").strip()
+    if not name:
+        name = os.path.basename(path.rstrip("\\/")) if path not in (PROJECTS_DIR, DEFAULT_AGENT_ROOT) else ""
+    return jsonify({
+        "path": path,
+        "name": name,
+        "exists": os.path.isdir(path),
+        "connected": bool(cfg.get("path")),
+    })
+
+
+@app.route("/api/agent/config", methods=["POST"])
+def api_agent_config_set():
+    data = request.get_json(silent=True) or {}
+    path = _normalize_path(data.get("path"))
+    name = (data.get("name") or "").strip()
+    if not name:
+        # auto-detect the project name from the folder when reusing one
+        name = os.path.basename(path.rstrip("\\/"))
+    os.makedirs(path, exist_ok=True)
+    memory.set_agent_config({"path": path, "name": name})
+    return jsonify({"path": path, "name": name, "exists": True})
+
+
+@app.route("/api/agent/projects")
+def api_agent_projects():
+    """List project folders under the configured root so the user can pick
+    an existing one (name is auto-detected from the folder)."""
+    cfg = memory.agent_config
+    root = _normalize_path(cfg.get("path"))
+    out = []
+    if os.path.isdir(root):
+        for name in sorted(os.listdir(root)):
+            full = os.path.join(root, name)
+            if not os.path.isdir(full) or name.startswith("."):
+                continue
+            has_files = any(os.path.isfile(os.path.join(full, f))
+                            for f in ("index.html", "style.css", "app.js", "main.py"))
+            out.append({"name": name, "path": full, "hasFiles": has_files})
+    return jsonify({"projects": out, "root": root})
 
 
 # -------------------------------------------------------------- projects

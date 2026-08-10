@@ -21,6 +21,7 @@ class Memory:
             "sessions": [],          # [{id, title, messages:[{id,role,text,time,kind}], updated}]
             "active_session": None,  # session id
             "current_project": None, # project descriptor dict
+            "agent_config": None,    # agent tab settings {path, name}
             "learned_facts": {},     # keyword phrase -> fact text
             "corrections": [],       # [{template, error, fix}]
             "qa": {},                # question soft-text -> answer
@@ -135,6 +136,15 @@ class Memory:
 
     def set_current_project(self, proj: dict):
         self.data["current_project"] = proj
+        self.save()
+
+    # ------------------------------------------------------- agent config
+    @property
+    def agent_config(self):
+        return self.data.get("agent_config") or {}
+
+    def set_agent_config(self, cfg: dict):
+        self.data["agent_config"] = cfg
         self.save()
 
     # -------------------------------------------------------------- learn

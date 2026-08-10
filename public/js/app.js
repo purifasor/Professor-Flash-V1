@@ -45,6 +45,9 @@ function renderContent(text) {
       html += `<pre class="code-block" data-code-body="${id}"><code>${esc(code)}</code></pre>`;
     }
   }
+  // cloud build deliveries: [[DOWNLOAD:base64]] -> real zip download button
+  html = html.replace(/\[\[DOWNLOAD:([A-Za-z0-9+/=]+)\]\]/g,
+    (m, b64) => `<a class="dl-btn" download="project.zip" href="data:application/zip;base64,${b64}">${icon("copy")} دانلود پروژه (ZIP)</a>`);
   return html;
 }
 

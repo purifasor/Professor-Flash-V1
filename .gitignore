@@ -9,4 +9,7 @@ projects/
 Learned/
 engine/
 models/
+runtime/
+.vercel/
+api/__pycache__/
 *.log

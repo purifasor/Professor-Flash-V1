@@ -13,6 +13,7 @@ This script:
   6. opens the default browser
 """
 
+import atexit
 import os
 import shutil
 import socket
@@ -156,74 +157,87 @@ def open_browser(url):
 
 
 # ------------------------------------------------------------------ brain
-_LLAMA_PROC = {"proc": None}
+# The bundled llama-server is NOT started here anymore. The web server owns
+# it through app/brain/brain_server.py and loads it ON DEMAND: it starts
+# only when a task really needs it and unloads itself after ~5 idle minutes,
+# so the heavy model is never in RAM while the app is idle.
+# run.py is only responsible for cleaning up orphan processes from previous
+# runs (pid files) so nothing keeps running in the background.
+
+RUNTIME_DIR = os.path.join(PROJECT_DIR, "runtime")
+SERVER_PID_FILE = os.path.join(RUNTIME_DIR, "server.pid")
+LLAMA_PID_FILE = os.path.join(RUNTIME_DIR, "llama.pid")
 
 
-def start_bundled_brain():
-    """Start the bundled llama-server (engine/llama) with the model in
-    models/ if both exist. Runs in a background thread so the web UI still
-    comes up instantly; the model answers as soon as it has loaded.
-    Returns nothing (threaded).
-    """
-    exe = os.path.join(PROJECT_DIR, "engine", "llama", "llama-server.exe")
-    if not os.path.exists(exe):
-        return
-    ggu = None
-    models_dir = os.path.join(PROJECT_DIR, "models")
-    if os.path.isdir(models_dir):
-        for f in sorted(os.listdir(models_dir)):
-            if f.endswith(".gguf"):
-                p = os.path.join(models_dir, f)
-                # skip a still-downloading (partial) file
-                if os.path.getsize(p) > 50 * 1024 * 1024 and time.time() - os.path.getmtime(p) > 60:
-                    ggu = p
-                    break
-    if not ggu:
-        log("Model not found in models/ - run download_model.py to enable the real local brain")
-        return
-    port = 8081
-    cmd = [exe, "-m", ggu, "-c", "4096", "--host", "127.0.0.1", "--port", str(port),
-           "-t", "4", "--no-webui"]
-    flags = 0
-    if os.name == "nt":
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+def _pid_alive(pid):
+    if not pid:
+        return False
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                creationflags=flags)
-    except Exception as exc:
-        warn(f"Could not start bundled brain: {exc}")
+        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                           capture_output=True, text=True, timeout=10)
+        return str(pid) in r.stdout
+    except Exception:
+        return True
+
+
+def _kill_pid(pid):
+    if not pid or not _pid_alive(pid):
         return
-    _LLAMA_PROC["proc"] = proc
-    log(f"Bundled brain loading ({os.path.basename(ggu)}) on 127.0.0.1:{port} ...")
-    import urllib.request
-    for _ in range(120):
-        if proc.poll() is not None:
-            warn("Bundled brain exited unexpectedly; continuing without it.")
-            return
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=1):
-                log("Bundled brain ready (Aya-Expanse 8B - کاملا آفلاین و رایگان)")
-                return
-        except Exception:
-            time.sleep(0.5)
-    warn("Bundled brain took too long to load; continuing without it.")
     try:
-        proc.kill()
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                       capture_output=True, timeout=10)
+        log(f"Stale process killed (PID {pid})")
     except Exception:
         pass
 
 
-def stop_bundled_brain():
-    proc = _LLAMA_PROC.get("proc")
-    if proc and proc.poll() is None:
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:
+def _cleanup_previous_runs():
+    """Kill leftovers from earlier runs so nothing stays in the background:
+    the previous web server and the previous bundled brain."""
+    try:
+        os.makedirs(RUNTIME_DIR, exist_ok=True)
+        for f in (SERVER_PID_FILE, LLAMA_PID_FILE):
+            if os.path.exists(f):
+                with open(f, "r", encoding="utf-8") as fh:
+                    pid = int((fh.read() or "0").strip() or 0)
+                _kill_pid(pid)
+    except Exception:
+        pass
+    # belt & suspenders: any process still listening on the brain port
+    try:
+        from app.brain import brain_server
+        brain_server.stop_orphans()
+    except Exception:
+        pass
+
+
+def _write_pidfile():
+    try:
+        os.makedirs(RUNTIME_DIR, exist_ok=True)
+        with open(SERVER_PID_FILE, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+
+
+def _cleanup_on_exit():
+    """Kill the bundled brain (by pid file) and remove our own pid file."""
+    try:
+        if os.path.exists(LLAMA_PID_FILE):
+            with open(LLAMA_PID_FILE, "r", encoding="utf-8") as f:
+                pid = int((f.read() or "0").strip() or 0)
+            _kill_pid(pid)
             try:
-                proc.kill()
+                os.remove(LLAMA_PID_FILE)
             except Exception:
                 pass
+    except Exception:
+        pass
+    try:
+        if os.path.exists(SERVER_PID_FILE):
+            os.remove(SERVER_PID_FILE)
+    except Exception:
+        pass
 
 
 def main():
@@ -237,6 +251,9 @@ def main():
     log(f"OS: {sys.platform}")
     log(f"Python: {sys.version.split()[0]}")
     log(f"Directory: {PROJECT_DIR}")
+
+    # never leave the previous run's processes in the background
+    _cleanup_previous_runs()
 
     py = ensure_venv()
     under_venv = os.path.exists(py) and os.path.abspath(sys.executable) == os.path.abspath(py)
@@ -256,7 +273,6 @@ def main():
         warn("Some packages could not be installed; continuing anyway.")
 
     detect_tools()
-    threading.Thread(target=start_bundled_brain, daemon=True).start()
 
     port = find_free_port(PORT)
     url = f"http://{HOST}:{port}"
@@ -285,6 +301,9 @@ def main():
         warn("Server did not answer; check the logs above.")
         sys.exit(1)
 
+    _write_pidfile()
+    atexit.register(_cleanup_on_exit)
+
     print()
     print("=" * 62)
     print("  Professor Flash V1 is running!")
@@ -299,7 +318,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n[+] Shutting down. Goodbye!")
-        stop_bundled_brain()
+        _cleanup_on_exit()
         os._exit(0)
 
 

@@ -1,0 +1,18 @@
+# everything the cloud deploy does NOT need (keeps upload tiny)
+.git
+.freebuff
+.vercel
+.venv
+venv
+models
+projects
+Learned
+engine
+runtime
+dist
+memory
+memory.json
+nohup.out
+*.log
+__pycache__
+*.pyc
