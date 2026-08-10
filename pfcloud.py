@@ -45,7 +45,7 @@ MODEL_INFO = {
     "offline": False,
     "type": "cloud-hybrid",
     "brain": "PRF",
-    "activeProvider": None,
+    "activeProvider": "PRF (ابر - رایگان)",
     "learnedCount": 0,
     "projectsRoot": "workspace (ابر)",
 }
@@ -224,11 +224,60 @@ def _pollinations(messages, timeout=8):
     return None
 
 
-def brain(messages, timeout=8):
-    """Free chain, latency-bounded for serverless (Vercel 10s cap).
+LLM7_URL = "https://api.llm7.io/v1/chat/completions"
+OVH_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions"
 
-    At most ONE keyed provider is tried (Gemini > DeepSeek > OpenRouter),
-    then the anonymous Pollinations fallback. Worst case ~8s.
+# open-weight models with free anonymous tiers (premium models need a key)
+LLM7_MODELS = ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b", "Inkling"]
+OVH_MODELS = ["gpt-oss-20b", "Qwen3.5-9B"]
+
+
+def _llm7(messages, timeout=6, max_tokens=1200):
+    """LLM7.io anonymous free tier (no key) - OpenAI-compatible."""
+    for model in LLM7_MODELS:
+        body = {"model": model, "messages": messages, "temperature": 0.7,
+                "max_tokens": max_tokens, "stream": False}
+        raw = _post_json(LLM7_URL, body, timeout=timeout)
+        if not raw:
+            continue
+        try:
+            d = json.loads(raw)
+            if d.get("error"):
+                continue
+            out = (d.get("choices") or [{}])[0].get("message", {}).get("content")
+            if out:
+                return _clean(out), "LLM7 " + model + " (رایگان)"
+        except Exception:
+            continue
+    return None
+
+
+def _ovh(messages, timeout=5, max_tokens=1200):
+    """OVHcloud AI Endpoints anonymous free tier - OpenAI-compatible."""
+    for model in OVH_MODELS:
+        body = {"model": model, "messages": messages, "temperature": 0.7,
+                "max_tokens": max_tokens, "stream": False}
+        raw = _post_json(OVH_URL, body, timeout=timeout)
+        if not raw:
+            continue
+        try:
+            d = json.loads(raw)
+            if d.get("error"):
+                continue
+            out = (d.get("choices") or [{}])[0].get("message", {}).get("content")
+            if out:
+                return _clean(out), "OVH " + model + " (رایگان)"
+        except Exception:
+            continue
+    return None
+
+
+def brain(messages, timeout=12, max_tokens=1200):
+    """Free chain with retry/backoff, latency-bounded for serverless.
+
+    Env-keyed premium (Gemini > DeepSeek > OpenRouter) if set, else the
+    anonymous free tier: LLM7 (4 open models), OVH (2 models), LLM7 retry
+    (rate windows clear). Worst case fits the 20s function cap.
     """
     keyed = None
     if os.environ.get("GEMINI_API_KEY"):
@@ -238,10 +287,19 @@ def brain(messages, timeout=8):
     elif os.environ.get("OPENROUTER_API_KEY"):
         keyed = _openrouter
     if keyed:
-        r = keyed(messages, timeout=min(timeout, 4))
+        r = keyed(messages, timeout=min(timeout, 6))
         if r and r[0]:
             return r
-    r = _pollinations(messages, timeout=min(timeout, 4))
+    # long first attempt (multi-file builds need real generation time)
+    r = _llm7(messages, timeout=max(8, min(timeout - 6, 32)), max_tokens=max_tokens)
+    if r and r[0]:
+        return r
+    time.sleep(0.8)
+    r = _ovh(messages, timeout=min(max(timeout - 8, 4), 8), max_tokens=max_tokens)
+    if r and r[0]:
+        return r
+    time.sleep(1.2)
+    r = _llm7(messages, timeout=min(max(timeout - 12, 4), 8), max_tokens=max_tokens)
     if r and r[0]:
         return r
     return None, None
@@ -366,10 +424,11 @@ SYSTEM_BUILD = SYSTEM_CORE + (
     "\n\nYou are a senior full-stack engineer. Build the COMPLETE project the user asked for, "
     "thinking about architecture and algorithm first. Output each file in this exact format:\n"
     "===FILE: index.html===\n<full file content>\n===END===\n"
-    "Rules: every file complete and correct, never truncated; files must reference each other "
-    "consistently (sync html/css/js names); no comments in the code unless the user asked; "
-    "Persian UI uses the Vazirmatn font; web pages are responsive, animated, SEO-friendly "
-    "and accessible. After the files, write one short Persian summary line."
+    "STRICTLY use the ===FILE: name=== / ===END=== markers for every file - never use ``` "
+    "fences, never JSON. Rules: every file complete and correct, never truncated; files must "
+    "reference each other consistently (sync html/css/js names); no comments in the code unless "
+    "the user asked; Persian UI uses the Vazirmatn font; web pages are responsive, animated, "
+    "SEO-friendly and accessible. After the files, write one short Persian summary line."
 )
 
 
@@ -385,9 +444,9 @@ def _handler_control(text):
     return "گفتگو پاک شد.", []
 
 
-def _ask(messages, system, timeout=9):
+def _ask(messages, system, timeout=11, max_tokens=1200):
     full = [{"role": "system", "content": system}] + messages
-    return brain(full, timeout=timeout)
+    return brain(full, timeout=timeout, max_tokens=max_tokens)
 
 
 def _handler_chat(text, history):
@@ -426,19 +485,46 @@ def _handler_analyze(text):
 
 
 # ------------------------------------------------------------ build
+LANG_FILE = {"html": "index.html", "css": "style.css", "js": "app.js",
+             "javascript": "app.js", "python": "main.py", "py": "main.py"}
+
+
 def _parse_files(out):
     files = {}
+    # 1) strict ===FILE: name=== markers
     m = re.findall(r"===FILE:\s*([^\n=]+?)\s*===\n?(.*?)(?:\n===END===|$)", out, re.S)
     for name, content in m:
         files[name.strip()] = content.strip("\n")
-    if not files:
-        # single-file output: decide by content heuristics
-        if "<!DOCTYPE" in out or "<html" in out:
-            files["index.html"] = out.strip("\n")
-        elif out.strip().startswith(("def ", "import ", "from ", "print(", "#!")):
-            files["main.py"] = out.strip("\n")
+    if files:
+        return files
+    # 2) markdown fences: ```lang ... ```
+    blocks = re.findall(r"```(\w*)\n?(.*?)```", out, re.S)
+    for lang, code in blocks:
+        lang = lang.strip().lower()
+        code = code.strip("\n")
+        if not code:
+            continue
+        name = LANG_FILE.get(lang)
+        if not name:
+            if "<!DOCTYPE" in code or "<html" in code:
+                name = "index.html"
+            elif lang in ("py", "python") or code.startswith(("def ", "import ", "from ", "print(")):
+                name = "main.py"
+            else:
+                name = "app.js"
+        if name not in files:
+            files[name] = code
         else:
-            files["index.html"] = out.strip("\n")
+            files[name + "_" + str(len(files)) + "." + ("html" if name == "index.html" else "py")] = code
+    if files:
+        return files
+    # 3) single-file output: decide by content heuristics
+    if "<!DOCTYPE" in out or "<html" in out:
+        files["index.html"] = out.strip("\n")
+    elif out.strip().startswith(("def ", "import ", "from ", "print(", "#!")):
+        files["main.py"] = out.strip("\n")
+    else:
+        files["index.html"] = out.strip("\n")
     return files
 
 
@@ -449,7 +535,7 @@ def _fix_files(files, error, text, prov):
         "Output the COMPLETE corrected files again in the same ===FILE: name=== format, "
         "fixing only what is broken." % error
     )
-    out, prov2 = _ask([{"role": "user", "content": text}], sysmsg, timeout=9)
+    out, prov2 = _ask([{"role": "user", "content": text}], sysmsg, timeout=40, max_tokens=3200)
     if out:
         return _parse_files(out), prov2
     return files, prov
@@ -502,7 +588,7 @@ def _handler_build(text):
             "\n\nThis is a web project: produce index.html, style.css and app.js. Make the "
             "design beautiful, dark, modern and animated; use Vazirmatn for Persian."
         )
-    out, prov = _ask([{"role": "user", "content": text}], sysmsg, timeout=9)
+    out, prov = _ask([{"role": "user", "content": text}], sysmsg, timeout=40, max_tokens=3200)
     if not out:
         return None, None, todos, prov
     files = _parse_files(out)
@@ -668,7 +754,7 @@ def api_chat():
     if reply:
         _log(logs, "پاسخ کامل شد" + (" توسط " + prov if prov else ""))
     else:
-        reply = ("هیچ موتور فکری آنلاین در دسترس نبود (Pollinations/Gemini/DeepSeek). "
+        reply = ("هیچ موتور فکری آنلاین در دسترس نبود (LLM7/OVH free tier). "
                  "لطفا چند لحظه دیگر دوباره تلاش کن.")
         _log(logs, "هیچ موتور آنلاین پاسخ نداد", "error")
     os.environ["PF_LAST_PROVIDER"] = prov or ""

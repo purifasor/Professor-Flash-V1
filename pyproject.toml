@@ -1,2 +1,9 @@
+[project]
+name = "professor-flash-v1"
+version = "1.0.0"
+description = "Professor Flash V1 - free, unrestricted AI agent (cloud brain)"
+requires-python = ">=3.10"
+dependencies = ["flask>=2.2"]
+
 [tool.vercel]
 entrypoint = "pfcloud:app"

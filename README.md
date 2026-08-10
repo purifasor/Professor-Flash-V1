@@ -72,3 +72,37 @@ app/static/            UI (index.html + css + js)
 Learned/               دانسته‌های ذخیره‌شده توسط مدل
 projects/              پروژه‌های ساخته‌شده
 ```
+
+## نسخه ابری (Vercel) — بدون استفاده از سخت افزار سیستم شما
+
+یک نسخه کاملا ابری از Professor Flash V1 ساخته و مستقر شده است که **هیچ** پردازشی روی
+سیستم شما انجام نمی‌دهد (رم/CPU/گرافیک = صفر؛ هیچ `llama.service` یا فرآیند پس‌زمینه‌ای نیاز نیست).
+
+- **آدرس**: https://professor-flash-v1.vercel.app
+- **مخزن**: https://github.com/purifasor/Professor-Flash-V1
+- **مغز**: زنجیره رایگان بدون کلید — LLM7 `gpt-oss:20b` و OVH `gpt-oss-20b`
+  (مدل‌های open-weight، رایگان و بدون تاریخ انقضا). اگر کلید رایگان `GEMINI_API_KEY`
+  (از aistudio.google.com — رایگان و بدون انقضا) یا `DEEPSEEK_API_KEY` در Vercel ست شود،
+  مغز خودکار به آن ارتقا می‌یابد.
+- **محدودیت صادقانه**: سرویس‌های رایگان ناشناس نرخ محدود دارند (LLM7 ~30 درخواست/دقیقه،
+  OVH ~2/دقیقه) و سشن‌ها در حافظه‌ی موقت سرور می‌مانند؛ ساخت برنامه‌های چندفایلی ممکن است
+  ۲۰ تا ۶۰ ثانیه طول بکشد (کیفیت اولویت است). پروژه‌های ساخته‌شده به‌صورت فایل ZIP
+  قابل دانلود در همان چت تحویل داده می‌شوند.
+
+### استقرار مجدد (اختیاری)
+
+```bash
+cd api  # یا ریشه‌ی پروژه
+npx vercel --prod --token <VERCEL_TOKEN>
+# برای مغز قوی‌تر (اختیاری):
+npx vercel env add GEMINI_API_KEY production
+```
+
+ساختار ابری:
+
+```
+pfcloud.py        مغز ابری (serverless): همان API محلی + مسیریابی PRF + ساخت به ZIP
+public/           UI (کپی استاتیک: چت + Agent)
+vercel.json       تنظیمات Vercel (maxDuration 60s، rewrite /agent)
+pyproject.toml    entrypoint = pfcloud:app
+```
