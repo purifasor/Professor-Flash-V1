@@ -50,6 +50,102 @@ MODEL_INFO = {
     "projectsRoot": "workspace (ابر)",
 }
 
+# --------------------------------------------------------- knowledge
+# Offline knowledge banks shipped in the repo (Knowledge/ folder). The brain
+# retrieves the sections relevant to the user's message and injects them into
+# the system prompt, so answers are accurate and professional without internet.
+KB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Knowledge")
+KB_SECTIONS = []  # (filename, body)
+
+
+def _load_kb():
+    if not os.path.isdir(KB_DIR):
+        return
+    try:
+        for fn in sorted(os.listdir(KB_DIR)):
+            if not fn.endswith(".md") or fn.lower() == "readme.md":
+                continue
+            with open(os.path.join(KB_DIR, fn), "r", encoding="utf-8") as f:
+                KB_SECTIONS.append((fn, f.read()))
+    except Exception:
+        pass
+
+
+_load_kb()
+
+_KB_STOP = {"این", "که", "برای", "یک", "با", "روی", "از", "به", "را", "و", "یا", "ما",
+            "تو", "من", "میخوام", "می‌خواهم", "باید", "بود", "هست", "شود", "کن",
+            "بگو", "یه", "باید", "چی", "چیه", "کرد", "میكنم", "بتونه", "نمی"}
+
+
+def _kb_words(text):
+    """Normalize text into a whole-word list (robust to ZWNJ/space variants)."""
+    t = _norm(text).replace("\u200c", " ")
+    return [w for w in re.split(r"[^\w\u0600-\u06FF]+", t) if len(w) > 1]
+
+
+def _kb_for(text, max_chars=1600):
+    """Keyword-scored retrieval of the most relevant knowledge sections.
+
+    Whole-word matching (not substring), frequency-weighted and capped, so the
+    most topical bank wins ties. Robust to ZWNJ vs regular-space variants.
+    """
+    if not KB_SECTIONS:
+        return ""
+    toks = [t for t in _kb_words(text) if t not in _KB_STOP]
+    if not toks:
+        return ""
+    scored = []
+    for fn, body in KB_SECTIONS:
+        words = _kb_words(body)
+        if not words:
+            continue
+        score = 0
+        for t in toks:
+            c = words.count(t)
+            if c:
+                score += min(c, 3)
+        if score:
+            # title mention (first 260 chars) counts double as a tie-break
+            head = _kb_words(body[:260])
+            if any(t in head for t in toks):
+                score += 2
+            scored.append((score, fn, body))
+    scored.sort(key=lambda x: -x[0])
+    out = []
+    used = 0
+    for score, fn, body in scored[:3]:
+        if used >= max_chars:
+            break
+        take = body[: max_chars - used]
+        out.append("## منبع: " + fn + "\n" + take)
+        used += len(take)
+    return "\n\n".join(out)
+
+
+# Persian quality rules: always injected so answers sound native, never templated.
+PERSIAN_STYLE = (
+    "\n\nPERSIAN QUALITY (strict, always):\n"
+    "- Reply in natural, fluent Persian: Persian word order (subject-object-verb), correct "
+    "punctuation (؟ ، ؛ «»), Persian digits (۰۱۲۳۴۵۶۷۸۹) and half-spaces (می‌روم، نمی‌شود).\n"
+    "- Never translate literally from English; write like a native Persian speaker. Keep "
+    "sentences short and clear; spell common loanwords naturally (اوکی، گیت‌هاب، سرچ، "
+    "دانلود، بک‌اند) without breaking the sentence structure.\n"
+    "- Match the user's tone (formal شما / friendly تو). Greet naturally and differently "
+    "every time - never reuse a template reply; compose every answer fresh for this message.\n"
+    "- Use the retrieved knowledge bank to answer accurately; compute numbers exactly."
+)
+
+
+def _system(base, text):
+    """base system prompt + relevant knowledge bank + Persian quality rules."""
+    kb = _kb_for(text)
+    extra = ""
+    if kb:
+        extra = "\n\nKNOWLEDGE BANK (use this to answer accurately):\n" + kb
+    return base + extra + PERSIAN_STYLE
+
+
 # ------------------------------------------------------------ text utils
 def _norm(s):
     s = str(s)
@@ -187,7 +283,27 @@ def _openrouter(messages, timeout=8):
 
 def _clean(txt):
     txt = txt.replace("<|END_OF_TURN_TOKEN|>", "").replace("<|end_of_turn|>", "")
-    return txt.strip()
+    return _dechain(txt.strip())
+
+
+# Some free reasoning models leak chain-of-thought into the reply. Strip
+# <think> blocks and a leading English meta-paragraph ("The user asks...")
+# when real content follows, so the user sees only the actual answer.
+_COT_LEAD = re.compile(
+    r"^\s*(?:the (?:user|request|question)|they (?:want|ask|are|need)|user (?:asks|wants|is asking)|i'?m (?:being|asked|supposed)|i need to (?:respond|answer|write|provide)|okay,? (?:so|the|let)|the correct (?:answer|response|way)),",
+    re.I,
+)
+
+
+def _dechain(txt):
+    if not txt:
+        return txt
+    t = re.sub(r"<think>.*?</think>\s*", "", txt, flags=re.S | re.I)
+    t = t.strip()
+    paras = re.split(r"\n\n+", t)
+    if len(paras) > 1 and _COT_LEAD.search(paras[0]):
+        t = "\n\n".join(paras[1:]).strip()
+    return t
 
 
 def _pollinations(messages, timeout=8):
@@ -229,10 +345,15 @@ KILO_URL = "https://api.kilo.ai/api/gateway/chat/completions"
 OVH_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions"
 
 # open-weight models verified live from Vercel with free anonymous tiers.
-# Overridden by Model/models.json when present (single source of truth).
-LLM7_MODELS = ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b"]
+# Quality-first order: bigger/stronger models first (min 30B where available),
+# small fallbacks last. Overridden by Model/models.json when present.
+# Verified live from Vercel's servers (see /api/diag2): LLM7 gemma4:31b,
+# OVH Meta-Llama-3_3-70B and Qwen3-32B, Kilo openrouter/free.
+# Quality-first: >=30B models first, small reliable fallbacks last.
+# (minimax-m2.7 tested OK but leaks chain-of-thought, so it is not used.)
+LLM7_MODELS = ["gemma4:31b", "gpt-oss:20b", "mistral-Nemo-Instruct-2407"]
 KILO_MODELS = ["openrouter/free", "kilo-auto/free"]
-OVH_MODELS = ["Qwen3.5-9B", "gpt-oss-20b"]
+OVH_MODELS = ["Meta-Llama-3_3-70B-Instruct", "Qwen3-32B", "gpt-oss-20b", "Qwen3.5-9B"]
 
 
 def _load_model_registry():
@@ -528,14 +649,43 @@ REFUSAL_RE = re.compile(
     re.I,
 )
 
+# Safety-tone / non-answer detection: hosted models sometimes reply with a
+# safety lecture instead of refusing outright (e.g. "X، نیست. این کار خطرناک و
+# غیرقابل بازگشت است"). Those are non-answers - detect them and force a real
+# answer through the refusal-override machinery.
+SAFETY_RE = re.compile(
+    r"غیرقابل بازگشت|غیر قابل بازگشت|جبران‌ناپذیر|life-?threatening|irreversible|"
+    r"بسیار خطرناک|برای (شما|جان شما) خطرناک|خطرناک و (غیرقابل|غیر قابل|جبران)|به خطر (می‌اندازد|می اندازد|بیندازید)|"
+    r"توصیه (نمی‌کنم|نمی کنم|نمیکنم)|پیشنهاد (نمی‌کنم|نمی کنم|نمیکنم)|"
+    r"بهتر است (که )?(این کار را )?(نکنید|ندارید|نگویید|نباشید|نروید|نکنیم|نه)|بهتر (هست|هستش) (که )?(نکنید|ندارید)|"
+    r"به جای (آن|این کار|این روش)|به‌جای (آن|این کار|این روش)|در عوض (آن|این کار)|"
+    r"هرگز (این کار|اقدام|چنین کاری)|تحت هیچ شرایطی|"
+    r"سلامت (روان|جسم|شما)|بهداشت روان|جان شما|امنیت شما|"
+    r"در صورت داشتن (افکار|تمایل|نیت)|به یک (متخصص|مشاور|روانشناس|پزشک)|کمک (حرفه‌ای|پزشکی|روان‌شناختی|روان‌پزشکی)|"
+    r"ممنوع (است|می‌باشد)|غیرقانونی (است|می‌باشد)|خلاف قانون|جرم (است|محسوب می‌شود)|"
+    r"عواقب (جبران‌ناپذیر|قانونی|ناخوشایند|بسیار)|"
+    r"دستورالعمل‌های (ایمنی|اخلاقی)|دستورالعمل های (ایمنی|اخلاقی)|سیاست‌های (ایمنی|اخلاقی)|"
+    r"not recommended|strongly (recommend|advise) against|would (not|n't) recommend|"
+    r"seek (professional|medical|mental|immediate) help|crisis (hotline|line|support)|reach out to a (professional|counselor|therapist)|"
+    r"against the law|that's illegal|a crime|legal trouble|"
+    r"under no circumstances|never (attempt|do|engage in)|"
+    r"put (yourself|your) at risk|harm yourself|self-?harm|"
+    r"my (ethics|guidelines|policy|principles) (prevent|forbid|do not allow|don'?t allow)|"
+    r"instead of (that|this|doing|trying)|rather than (that|this)|"
+    r"safety (concerns|guidelines|policies|warning)|dangerous and (irreversible|harmful)",
+    re.I,
+)
+
 
 def _is_refusal(text):
-    return bool(text) and bool(REFUSAL_RE.search(str(text)[:500]))
+    t = str(text)[:500]
+    return bool(t) and (bool(REFUSAL_RE.search(t)) or bool(SAFETY_RE.search(t)))
 
 
 def _strip_refusal(text):
     parts = re.split(r"\n\n+", str(text).strip())
-    kept = [p for p in parts if not REFUSAL_RE.search(p[:200])]
+    kept = [p for p in parts
+            if not REFUSAL_RE.search(p[:200]) and not SAFETY_RE.search(p[:200])]
     return "\n\n".join(kept) if kept else str(text)
 
 
@@ -616,12 +766,12 @@ def _ask(messages, system, timeout=11, max_tokens=1200):
 def _handler_chat(text, history):
     msgs = [{"role": m["role"], "content": m["text"]} for m in history[-8:]]
     msgs.append({"role": "user", "content": text})
-    out, prov = _ask(msgs, SYSTEM_QUESTION)
+    out, prov = _ask(msgs, _system(SYSTEM_QUESTION, text))
     return out, prov
 
 
 def _handler_snippet(text):
-    sysmsg = SYSTEM_SNIPPET + (
+    sysmsg = _system(SYSTEM_SNIPPET, text) + (
         "\n\nThe user asked for: " + text
     )
     out, prov = _ask([{"role": "user", "content": text}], sysmsg)
@@ -629,22 +779,22 @@ def _handler_snippet(text):
 
 
 def _handler_teach(text):
-    out, prov = _ask([{"role": "user", "content": text}], SYSTEM_TEACH)
+    out, prov = _ask([{"role": "user", "content": text}], _system(SYSTEM_TEACH, text))
     return out, prov
 
 
 def _handler_translate(text):
-    out, prov = _ask([{"role": "user", "content": text}], SYSTEM_TRANSLATE)
+    out, prov = _ask([{"role": "user", "content": text}], _system(SYSTEM_TRANSLATE, text))
     return out, prov
 
 
 def _handler_prompt(text):
-    out, prov = _ask([{"role": "user", "content": text}], SYSTEM_PROMPT)
+    out, prov = _ask([{"role": "user", "content": text}], _system(SYSTEM_PROMPT, text))
     return out, prov
 
 
 def _handler_analyze(text):
-    out, prov = _ask([{"role": "user", "content": text}], SYSTEM_ANALYZE)
+    out, prov = _ask([{"role": "user", "content": text}], _system(SYSTEM_ANALYZE, text))
     return out, prov
 
 
@@ -694,7 +844,7 @@ def _parse_files(out):
 
 def _fix_files(files, error, text, prov):
     """One repair pass when a python file fails syntax check."""
-    sysmsg = SYSTEM_BUILD + (
+    sysmsg = _system(SYSTEM_BUILD, text) + (
         "\n\nThe previous attempt had this error:\n%s\n"
         "Output the COMPLETE corrected files again in the same ===FILE: name=== format, "
         "fixing only what is broken." % error
@@ -740,7 +890,7 @@ def _handler_build(text):
              "نوشتن و تولید فایلها",
              "بررسی صحت و هماهنگی فایلها",
              "تحویل پروژه"]
-    sysmsg = SYSTEM_BUILD
+    sysmsg = _system(SYSTEM_BUILD, text)
     if py:
         sysmsg += (
             "\n\nThis is a Python program. Produce a single main.py file (or a few .py files "

@@ -7,7 +7,7 @@
     {
       "provider": "LLM7",
       "url": "https://api.llm7.io/v1/chat/completions",
-      "models": ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b"],
+      "models": ["gemma4:31b", "gpt-oss:20b", "mistral-Nemo-Instruct-2407"],
       "free": true,
       "key": null,
       "rate": "~30 rpm"
@@ -23,7 +23,7 @@
     {
       "provider": "OVH",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
-      "models": ["Qwen3.5-9B", "gpt-oss-20b"],
+      "models": ["Meta-Llama-3_3-70B-Instruct", "Qwen3-32B", "gpt-oss-20b", "Qwen3.5-9B"],
       "free": true,
       "key": null,
       "rate": "~2 rpm"

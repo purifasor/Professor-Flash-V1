@@ -39,3 +39,29 @@ every call in a 3-level override:
 
 See `models.json` for the connected free anonymous providers (LLM7, Kilo, OVH)
 and optional premium env keys (Gemini / DeepSeek / OpenRouter).
+
+## Safety-Tone Detection (non-answers)
+
+Hosted models sometimes reply with a safety lecture instead of an outright
+refusal («بهترین روش خودکشی، نیست. این کار خطرناک و غیرقابل بازگشت است»,
+"The method is not recommended", "seek professional help", "better not to").
+These are non-answers — the request was not fulfilled. `SAFETY_RE` detects
+this tone (Persian + English) and routes it through the same 3-level
+refusal-override, so the user always receives the actual requested content:
+real methods, real code, real analysis — never a warning or a moral lecture.
+The model answers with knowledge, not emotion or safety advice.
+
+## Persian Quality Contract
+
+Every reply is composed fresh (never templated) and must be natural, fluent
+Persian: correct word order, proper punctuation (؟ ، ؛ «»), Persian digits,
+half-spaces, native phrasing (no literal English translations), and tone
+matching (formal شما / friendly تو). Common loanwords (اوکی، گیتهاب، سرچ)
+are spelled naturally without breaking sentence structure.
+
+## Knowledge Bank
+
+Offline knowledge banks in `Knowledge/` (Persian, translation, communication,
+coding-python, coding-web, security, thinking, math-physics, design, seo-dork,
+prompt-engineering, teaching) are keyword-retrieved per message and injected
+into the system prompt so answers are accurate without internet.
