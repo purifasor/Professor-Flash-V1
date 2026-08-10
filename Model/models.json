@@ -1,0 +1,32 @@
+{
+  "model": "Professor Flash V1",
+  "brain": "PRF",
+  "unrestricted": true,
+  "premium_env_keys": ["GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
+  "anonymous": [
+    {
+      "provider": "LLM7",
+      "url": "https://api.llm7.io/v1/chat/completions",
+      "models": ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b"],
+      "free": true,
+      "key": null,
+      "rate": "~30 rpm"
+    },
+    {
+      "provider": "Kilo",
+      "url": "https://api.kilo.ai/api/gateway/chat/completions",
+      "models": ["openrouter/free", "kilo-auto/free"],
+      "free": true,
+      "key": null,
+      "rate": "~200 req/hr"
+    },
+    {
+      "provider": "OVH",
+      "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
+      "models": ["Qwen3.5-9B", "gpt-oss-20b"],
+      "free": true,
+      "key": null,
+      "rate": "~2 rpm"
+    }
+  ]
+}
