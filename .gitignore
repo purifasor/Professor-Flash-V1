@@ -13,3 +13,5 @@ runtime/
 .vercel/
 api/__pycache__/
 *.log
+
+.vercel

@@ -1,4 +1,6 @@
 # everything the cloud deploy does NOT need (keeps upload tiny)
+# app/ is the LOCAL Flask server + local brain; the cloud uses api/index.py
+app
 .git
 .freebuff
 .vercel
