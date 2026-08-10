@@ -225,59 +225,71 @@ def _pollinations(messages, timeout=8):
 
 
 LLM7_URL = "https://api.llm7.io/v1/chat/completions"
+KILO_URL = "https://api.kilo.ai/api/gateway/chat/completions"
 OVH_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions"
 
-# open-weight models with free anonymous tiers (premium models need a key)
-LLM7_MODELS = ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b", "Inkling"]
-OVH_MODELS = ["gpt-oss-20b", "Qwen3.5-9B"]
+# open-weight models verified live from Vercel with free anonymous tiers
+LLM7_MODELS = ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b"]
+KILO_MODELS = ["openrouter/free", "kilo-auto/free"]
+OVH_MODELS = ["Qwen3.5-9B", "gpt-oss-20b"]
+
+# per-model cooldown: after a 429/timeout skip that model for a while so the
+# next user message rotates to a different free provider instead of failing
+PROV_STATE = {}
 
 
-def _llm7(messages, timeout=6, max_tokens=1200):
-    """LLM7.io anonymous free tier (no key) - OpenAI-compatible."""
-    for model in LLM7_MODELS:
+def _cool(key):
+    return PROV_STATE.get(key, 0) > time.time()
+
+
+def _mark(key, secs):
+    PROV_STATE[key] = time.time() + secs
+
+
+def _try_completions(url, models, messages, timeout, max_tokens, label):
+    for model in models:
+        key = label + ":" + model
+        if _cool(key):
+            continue
         body = {"model": model, "messages": messages, "temperature": 0.7,
                 "max_tokens": max_tokens, "stream": False}
-        raw = _post_json(LLM7_URL, body, timeout=timeout)
+        raw = _post_json(url, body, timeout=timeout)
         if not raw:
+            _mark(key, 15)
             continue
         try:
             d = json.loads(raw)
             if d.get("error"):
+                _mark(key, 45)
                 continue
             out = (d.get("choices") or [{}])[0].get("message", {}).get("content")
             if out:
-                return _clean(out), "LLM7 " + model + " (رایگان)"
+                PROV_STATE.pop(key, None)
+                return _clean(out), label + " " + model + " (رایگان)"
         except Exception:
+            _mark(key, 15)
             continue
     return None
 
 
-def _ovh(messages, timeout=5, max_tokens=1200):
-    """OVHcloud AI Endpoints anonymous free tier - OpenAI-compatible."""
-    for model in OVH_MODELS:
-        body = {"model": model, "messages": messages, "temperature": 0.7,
-                "max_tokens": max_tokens, "stream": False}
-        raw = _post_json(OVH_URL, body, timeout=timeout)
-        if not raw:
-            continue
-        try:
-            d = json.loads(raw)
-            if d.get("error"):
-                continue
-            out = (d.get("choices") or [{}])[0].get("message", {}).get("content")
-            if out:
-                return _clean(out), "OVH " + model + " (رایگان)"
-        except Exception:
-            continue
-    return None
+def _llm7(messages, timeout=8, max_tokens=1200):
+    return _try_completions(LLM7_URL, LLM7_MODELS, messages, timeout, max_tokens, "LLM7")
+
+
+def _kilo(messages, timeout=8, max_tokens=1200):
+    return _try_completions(KILO_URL, KILO_MODELS, messages, timeout, max_tokens, "Kilo")
+
+
+def _ovh(messages, timeout=8, max_tokens=1200):
+    return _try_completions(OVH_URL, OVH_MODELS, messages, timeout, max_tokens, "OVH")
 
 
 def brain(messages, timeout=12, max_tokens=1200):
-    """Free chain with retry/backoff, latency-bounded for serverless.
+    """Free chain with per-model rotation + second pass for long jobs.
 
     Env-keyed premium (Gemini > DeepSeek > OpenRouter) if set, else the
-    anonymous free tier: LLM7 (4 open models), OVH (2 models), LLM7 retry
-    (rate windows clear). Worst case fits the 20s function cap.
+    anonymous free tier: LLM7 (3 models) -> Kilo (2) -> OVH (2), with a
+    second LLM7/Kilo pass when the job is long (builds).
     """
     keyed = None
     if os.environ.get("GEMINI_API_KEY"):
@@ -290,18 +302,27 @@ def brain(messages, timeout=12, max_tokens=1200):
         r = keyed(messages, timeout=min(timeout, 6))
         if r and r[0]:
             return r
-    # long first attempt (multi-file builds need real generation time)
-    r = _llm7(messages, timeout=max(8, min(timeout - 6, 32)), max_tokens=max_tokens)
+    t = timeout
+    r = _llm7(messages, timeout=max(5, min(t, 20)), max_tokens=max_tokens)
     if r and r[0]:
         return r
-    time.sleep(0.8)
-    r = _ovh(messages, timeout=min(max(timeout - 8, 4), 8), max_tokens=max_tokens)
+    time.sleep(0.4)
+    r = _kilo(messages, timeout=max(4, min(t - 3, 10)), max_tokens=max_tokens)
     if r and r[0]:
         return r
-    time.sleep(1.2)
-    r = _llm7(messages, timeout=min(max(timeout - 12, 4), 8), max_tokens=max_tokens)
+    time.sleep(0.4)
+    r = _ovh(messages, timeout=max(3, min(t - 6, 6)), max_tokens=max_tokens)
     if r and r[0]:
         return r
+    if t >= 18:
+        time.sleep(0.6)
+        r = _llm7(messages, timeout=8, max_tokens=max_tokens)
+        if r and r[0]:
+            return r
+        time.sleep(0.4)
+        r = _kilo(messages, timeout=8, max_tokens=max_tokens)
+        if r and r[0]:
+            return r
     return None, None
 
 
