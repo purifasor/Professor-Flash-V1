@@ -1,7 +1,7 @@
 {
   "version": 2,
   "functions": {
-    "pfcloud.py": { "maxDuration": 60 }
+    "pfcloud.py": { "maxDuration": 120 }
   },
   "rewrites": [
     { "source": "/agent", "destination": "/agent.html" }

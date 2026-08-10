@@ -355,8 +355,23 @@ async function send(text) {
     state.taskId = data.taskId;
     pollTask(data.taskId);
   } catch (e) {
+    // transient serverless hiccup / cold start: retry once before giving up
+    try {
+      const r2 = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data2 = await r2.json();
+      if (r2.ok && data2.taskId) {
+        if (data2.sessionId) state.sessionId = data2.sessionId;
+        state.taskId = data2.taskId;
+        pollTask(data2.taskId);
+        return;
+      }
+    } catch (e2) { /* give up below */ }
     removeThinking();
-    addNote("اتصال به سرور برقرار نشد.");
+    addNote("اتصال به سرور برقرار نشد. دوباره تلاش کن.");
     state.busy = false;
   }
 }
