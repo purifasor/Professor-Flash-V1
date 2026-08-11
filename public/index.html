@@ -33,22 +33,20 @@
   <!-- ============ main: chat ============ -->
   <main class="main">
     <header class="topbar">
+      <div class="topbar-start">
       <button class="btn btn-ghost burger" id="btnBurger" title="باز و بسته کردن هیستوری" aria-label="منو">
         <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
-      <div class="brand">
+      <div class="brand" id="brandBlock">
         <div class="logo"><img src="/img/logo-128.png" alt="Professor Flash"></div>
         <div>
           <div class="brand-name">Professor Flash <span class="version">V1</span></div>
-          <div class="brand-sub" id="brandSub">چت - گفتگو، سوال و کد بدون ساخت فایل</div>
+          <div class="brand-sub" id="brandSub">PRF - فکر می‌کند، جواب می‌دهد</div>
         </div>
       </div>
-      <nav class="nav-tabs">
-        <a class="nav-tab active" href="/">چت</a>
-      </nav>
+      </div>
       <div class="topbar-info">
         <div class="chip" id="learnedChip" title="دانش ذخیره‌شده در پوشه Learned">یادگیری: ۰</div>
-        <div class="chip chip-path" id="pathChip" title="محل ذخیره پروژه‌ها">projects/</div>
       </div>
     </header>
 
@@ -60,7 +58,6 @@
         <div class="hero-logo"><img src="/img/logo-256.png" alt="Professor Flash"></div>
         <h1 class="hero-title">Professor Flash V1</h1>
         <p class="hero-sub">هر پیامی را می‌فهمد، فکر می‌کند و پاسخ واقعی می‌سازد - بدون ساخت فایل.</p>
-        <div class="chips" id="chips"></div>
       </div>
     </div>
 
@@ -100,6 +97,12 @@
       </div>
     </div>
   </main>
+
+  <!-- page switch: outside the chat area, bottom-left; Agent disabled for now -->
+  <div class="page-switch" id="pageSwitch">
+    <a class="ps-item active" href="/">چت</a>
+    <span class="ps-item disabled" id="psAgent" title="به‌زودی">Agent</span>
+  </div>
 
 </div>
 

@@ -5,9 +5,17 @@
   "premium_env_keys": ["GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
   "anonymous": [
     {
+      "provider": "OVH",
+      "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
+      "models": ["Qwen3.5-397B-A17B", "Meta-Llama-3_3-70B-Instruct", "gpt-oss-120b", "Qwen3-32B", "Qwen3.6-27B", "Qwen3-Coder-30B-A3B-Instruct", "Mistral-Small-3.2-24B-Instruct-2506", "gpt-oss-20b", "Qwen3.5-9B"],
+      "free": true,
+      "key": null,
+      "rate": "~2 rpm shared"
+    },
+    {
       "provider": "LLM7",
       "url": "https://api.llm7.io/v1/chat/completions",
-      "models": ["gemma4:31b", "gpt-oss:20b", "mistral-Nemo-Instruct-2407"],
+      "models": ["minimax-m2.7", "mistral-Nemo-Instruct-2407"],
       "free": true,
       "key": null,
       "rate": "~30 rpm"
@@ -19,14 +27,6 @@
       "free": true,
       "key": null,
       "rate": "~200 req/hr"
-    },
-    {
-      "provider": "OVH",
-      "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
-      "models": ["Meta-Llama-3_3-70B-Instruct", "Qwen3-32B", "Qwen3-Coder-30B-A3B-Instruct", "Mistral-Small-3.2-24B-Instruct-2506", "gpt-oss-20b", "Qwen3.5-9B"],
-      "free": true,
-      "key": null,
-      "rate": "~2 rpm"
     }
   ]
 }

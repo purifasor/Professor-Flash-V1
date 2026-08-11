@@ -12,6 +12,7 @@ Routing (PRF - Professor Flash Reasoning Framework):
 
 import ast
 import base64
+import hashlib
 import io
 import json
 import os
@@ -56,6 +57,76 @@ MODEL_INFO = {
 # retrieves the sections relevant to the user's message and injects them into
 # the system prompt, so answers are accurate and professional without internet.
 KB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Knowledge")
+
+# ------------------------------------------------------------ learning
+# Passive memory: everything genuinely NEW the brain learns (search parameters
+# and topics that were NOT already in its knowledge) is stored in the repo's
+# Learned/ folder - tiny JSON notes + an index.json - so it survives deploys
+# and the counter grows with each new item. On Vercel the FS is read-only, so
+# writes fall back to /tmp and are counted for the running instance.
+_LEARN_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "Learned", "index.json"),
+    os.path.join(os.getcwd(), "Learned", "index.json"),
+]
+LEARN_DIR = os.path.dirname(_LEARN_CANDIDATES[0])
+LEARN_INDEX = _LEARN_CANDIDATES[0]
+_learned_extra = set()
+
+
+def _learned_entries():
+    for p in _LEARN_CANDIDATES:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d.get("entries"), list):
+                return d["entries"]
+        except Exception:
+            continue
+    return []
+
+
+def _learned_root():
+    for p in _LEARN_CANDIDATES:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return os.path.dirname(p)
+        except Exception:
+            continue
+    return LEARN_DIR
+
+
+def _learned_count():
+    base = {e.get("digest") for e in _learned_entries()}
+    return len(base) + len(_learned_extra - base)
+
+
+def _maybe_learn(question, answer, source="llm"):
+    """Passively record genuinely-new knowledge (never raw chat messages)."""
+    try:
+        q = (question or "").strip()
+        a = (answer or "").strip()
+        if len(q) < 8 or len(a) < 40:
+            return
+        digest = hashlib.sha1(q.encode("utf-8")).hexdigest()[:16]
+        existing = {e.get("digest") for e in _learned_entries()}
+        if digest in existing or digest in _learned_extra:
+            return
+        entry = {"digest": digest, "topic": q[:24], "question": q,
+                 "source": source, "learned_at": time.time()}
+        root = _learned_root()
+        try:
+            os.makedirs(root, exist_ok=True)
+            entries = _learned_entries()
+            entries.append(entry)
+            with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as f:
+                json.dump({"entries": entries}, f, ensure_ascii=False)
+            with open(os.path.join(root, digest + ".json"), "w", encoding="utf-8") as f:
+                json.dump(dict(entry, content=a[:600]), f, ensure_ascii=False)
+        except Exception:
+            pass  # read-only FS on Vercel: still counted for this instance
+        _learned_extra.add(digest)
+    except Exception:
+        pass
 
 # Persian-language bank is only retrieved when the query is about language
 # itself (idioms, slang, tone, translation, feelings...), never for generic
@@ -528,6 +599,7 @@ def _dechain(txt):
     if not txt:
         return txt
     t = re.sub(r"<think>.*?</think>\s*", "", txt, flags=re.S | re.I)
+    t = re.sub(r"(?:^|\n)\s*(?:thinking|reasoning) process\s*:?\s*\n+", "\n", t, flags=re.I)
     t = t.strip()
     m = re.search(r"final answer:\s*", t, re.I)
     if m:
@@ -576,22 +648,17 @@ LLM7_URL = "https://api.llm7.io/v1/chat/completions"
 KILO_URL = "https://api.kilo.ai/api/gateway/chat/completions"
 OVH_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions"
 
-# open-weight models verified live from Vercel with free anonymous tiers.
-# Quality-first order: bigger/stronger models first (min 30B where available),
-# small fallbacks last. Overridden by Model/models.json when present.
-# Verified live from Vercel's servers (see /api/diag2): LLM7 gemma4:31b,
-# OVH Meta-Llama-3_3-70B and Qwen3-32B, Kilo openrouter/free.
-# Quality-first: >=30B models first, small reliable fallbacks last.
-# (minimax-m2.7 tested OK but leaks chain-of-thought, so it is not used.)
-# alive-first: gemma4:31b had an outage; gpt-oss:20b/mistral-Nemo answer
-# (Inkling variants require an API key, so they are not listed)
-LLM7_MODELS = ["gpt-oss:20b", "mistral-Nemo-Instruct-2407", "gemma4:31b"]
+# Quality-first chain, all verified live from Vercel's servers:
+# OVH now hosts true giants - Qwen3.5-397B-A17B (a 397B MoE) and
+# gpt-oss-120b - alongside the 70B/32B workhorses. LLM7's free tier is led
+# by minimax-m2.7 (MiniMax-M2, a 78B MoE). The small gpt-oss:20b/gemma4:31b
+# are dropped: too weak, and they caused the «موتور فکری LLM7 gpt-oss:20b»
+# the user asked to remove. (Inkling variants on LLM7 need an API key.)
+LLM7_MODELS = ["minimax-m2.7", "mistral-Nemo-Instruct-2407"]
 KILO_MODELS = ["openrouter/free", "kilo-auto/free"]
-# Quality-first >=30B chain: Llama-70B and Qwen3-32B for answers, the
-# Qwen3-Coder-30B for codegen, Mistral-Small-3.2-24B as a fresh strong fallback.
-OVH_MODELS = ["Meta-Llama-3_3-70B-Instruct", "Qwen3-32B",
-              "Qwen3-Coder-30B-A3B-Instruct", "Mistral-Small-3.2-24B-Instruct-2506",
-              "gpt-oss-20b", "Qwen3.5-9B"]
+OVH_MODELS = ["Qwen3.5-397B-A17B", "Meta-Llama-3_3-70B-Instruct", "gpt-oss-120b",
+              "Qwen3-32B", "Qwen3.6-27B", "Qwen3-Coder-30B-A3B-Instruct",
+              "Mistral-Small-3.2-24B-Instruct-2506", "gpt-oss-20b", "Qwen3.5-9B"]
 
 
 def _load_model_registry():
@@ -637,6 +704,10 @@ def _try_completions(url, models, messages, timeout, max_tokens, label, skip=Non
             continue
         body = {"model": model, "messages": messages, "temperature": 0.7,
                 "max_tokens": max_tokens, "stream": False}
+        # Qwen3.5-397B returns everything inside `reasoning` unless thinking is
+        # disabled - force direct answers so the user gets clean content.
+        if model.startswith("Qwen3") or model.startswith("Qwen3.5") or model.startswith("Qwen3.6"):
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         for attempt in (0, 1):  # retry once on rate-limit hiccups
             PROV_STATE["_net"] = PROV_STATE.get("_net", 0) + 1  # real attempt
             raw = _post_json(url, body, timeout=timeout)
@@ -652,10 +723,16 @@ def _try_completions(url, models, messages, timeout, max_tokens, label, skip=Non
                         continue
                     _mark(key, 18)
                     break
-                out = (d.get("choices") or [{}])[0].get("message", {}).get("content")
+                msg = (d.get("choices") or [{}])[0].get("message", {})
+                out = msg.get("content")
+                if not out:
+                    # some providers return everything in `reasoning`/`reasoning_content`
+                    out = msg.get("reasoning_content") or msg.get("reasoning")
+                    if out:
+                        out = _clean(out)
                 if out:
                     PROV_STATE.pop(key, None)
-                    return _clean(out), label + " " + model + " (رایگان)"
+                    return out, label + " " + model + " (رایگان)"
             except Exception:
                 _mark(key, 12)
                 break
@@ -1035,6 +1112,7 @@ SAFETY_RE = re.compile(
     r"توصیه می‌شود|توصیه میشود|بهتر است که|مهم است که|لازم است که|باید (در نظر|توجه) داشت|با دقت و (احتیاط|توجه)|"
     r"مراجعه (کنید|کن|کردن)|سازمان(های)? تخصصی|مشاوره (بگیرید|دریافت|حرفه)|دریافت کمک تخصصی|حمایت (حرفه‌ای|تخصصی)|"
     r"help is available|talk to someone|you matter|your life matters|it gets better|reach out|seek help|you are loved|there is hope|"
+    r"crisis text line|text home to 741741|741741|call or text 988|\b988\b|national suicide prevention lifeline|suicide prevention (lifeline|hotline|line)|international association for suicide prevention|lifeline|resources that may be able to help|helpline|hotline (number)?s?|call (this|the) (number|hotline)|"
     r"نمونه‌ای؟ (اولیه|آزمایشی|ساده|کامل نشده)|نمونه (اولیه|آزمایشی|ساده)|صرفاً (یک )?نمونه|فقط (یک )?نمونه|"
     r"پروتوتایپ|prototype|proof[- ]of[- ]concept|POC|کد (بالا|فوق) صرفاً|این کد (فقط|صرفا|صرفاً)|"
     r"مجوز (قانونی|مالک)|اجازه (قانونی|مالک)|داشتن مجوز|(بدون )?مجوز قانونی|قانونی است که (باید|نیاز)|(نیاز|نیازمند) (به )?(مجوز|اجازه)|قانونی؟ لازم|"
@@ -1257,10 +1335,19 @@ def _is_short_evasion(reply, user_text):
 
 
 def _brand(prov):
-    """Human label: «موتور فکری PRF 70B» - the real parameter of the model
+    """Human label: «موتور فکری PRF 397B» - the real parameter of the model
     that actually answered, never the raw provider name."""
+    _KNOWN_SIZES = {
+        "Qwen3.5-397B-A17B": "397B", "gpt-oss-120b": "120B", "gpt-oss-20b": "20B",
+        "Meta-Llama-3_3-70B-Instruct": "70B", "Qwen3-32B": "32B", "Qwen3.6-27B": "27B",
+        "Qwen3-Coder-30B-A3B-Instruct": "30B", "Mistral-Small-3.2-24B-Instruct-2506": "24B",
+        "minimax-m2.7": "78B", "mistral-Nemo-Instruct-2407": "12B", "gemma4:31b": "31B",
+    }
     name = (prov or "").split(" (")[0]
-    m = re.search(r"(\d{2,3})b", name, re.I)
+    model = name.split(" ", 1)[1] if " " in name else name
+    if model in _KNOWN_SIZES:
+        return "PRF " + _KNOWN_SIZES[model]
+    m = re.search(r"(\d{2,3})b", model, re.I)
     if m:
         return "PRF " + m.group(1).upper() + "B"
     return "PRF"
@@ -1543,6 +1630,7 @@ def _handler_build(text):
 @app.route("/api/model")
 def api_model():
     m = dict(MODEL_INFO)
+    m["learnedCount"] = _learned_count()
     # quick liveness probe: remember last good provider
     prov = os.environ.get("PF_LAST_PROVIDER")
     if prov:
@@ -1728,6 +1816,11 @@ def api_chat():
     os.environ["PF_LAST_PROVIDER"] = prov or ""
     if prov:
         MODEL_INFO["activeProvider"] = _brand(prov)
+    MODEL_INFO["learnedCount"] = _learned_count()
+    # passive learning: record genuinely-new knowledge, never busy/error text
+    if reply and not ("شلوغ" in reply or "موتور فکری آنلاین" in reply
+                      or "خطا" in reply):
+        _maybe_learn(text, reply)
     TASKS[tid] = {"status": "done", "reply": reply, "todos": [], "logs": logs,
                   "provider": _brand(prov) if prov else None}
     if not use_client_store and session is not None:

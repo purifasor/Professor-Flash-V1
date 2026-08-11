@@ -353,40 +353,69 @@ $("chatScroll").addEventListener("scroll", () => {
 });
 $("btnScrollDown").addEventListener("click", () => scrollDown(true));
 
-/* ------------------------------------------------ wait progress 0->100
-   A real expectation bar: it appears when a message is sent and is driven
-   by the actual time the server spends answering (it only finishes when the
-   reply actually arrives). Removed the moment the answer is delivered. */
-const waitEl = $("waitProgress");
+/* --------------------------------------- wait square (0->100 then morph)
+   A crimson square appears IN the chat when a message is sent: a spinning
+   ring + the real counter (0-100) driven by the time the server actually
+   spends answering. When the reply arrives it bursts and morphs away, so
+   the user always knows exactly how far the thinking has progressed. */
+const waitEl = $("waitProgress");   // legacy bar kept only as a fallback
 const waitFill = $("waitFill");
 const waitLabel = $("waitLabel");
 const waitPhase = $("waitPhase");
 let waitTimer = null;
 
-function setProgress(pct, phase) {
-  if (!waitEl) return;
-  waitEl.hidden = false;
-  const p = Math.max(0, Math.min(100, Math.round(pct)));
-  waitFill.style.width = p + "%";
-  waitLabel.textContent = p + "%";
-  if (phase) waitPhase.textContent = phase;
+function createWaitSquare() {
+  let wrap = $("waitSquareMsg");
+  if (wrap) return wrap;
+  wrap = document.createElement("div");
+  wrap.className = "msg bot wait-msg";
+  wrap.id = "waitSquareMsg";
+  wrap.innerHTML = `
+    ${avatarHtml("bot")}
+    <div class="wait-square" id="waitSquare">
+      <div class="ws-ring"></div>
+      <div class="ws-count"><span id="wsCount">0</span><span class="ws-pct">٪</span></div>
+      <span class="ws-phase" id="wsPhase">در حال ارسال درخواست...</span>
+    </div>`;
+  chatEl.appendChild(wrap);
+  scrollDown();
+  return wrap;
 }
 
-function hideProgress() {
+function setProgress(pct, phase) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  if (waitEl) waitEl.hidden = false;
+  if (waitFill) waitFill.style.width = p + "%";
+  if (waitLabel) waitLabel.textContent = p + "%";
+  if (waitPhase && phase) waitPhase.textContent = phase;
+  const cnt = $("wsCount");
+  if (cnt) cnt.textContent = p;
+  const sq = $("waitSquare");
+  if (sq) sq.style.setProperty("--p", p);
+  const ph = $("wsPhase");
+  if (ph && phase) ph.textContent = phase;
+}
+
+/* burst: the square scales up into a glow and morphs away - the moment the
+   real answer bubble rises in right behind it */
+function hideProgress(burst) {
   if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
   if (waitEl) waitEl.hidden = true;
+  const wrap = $("waitSquareMsg");
+  if (wrap) {
+    const sq = $("waitSquare");
+    if (sq && burst) sq.classList.add("burst");
+    setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, burst ? 620 : 10);
+  }
 }
 
-/* while the /api/chat request is in flight (the real thinking time), advance
-   the bar on a decelerating curve tied to elapsed seconds - it can only
-   reach ~88% while waiting, the last jump happens when the answer arrives */
 function startWaiting() {
-  if (!waitEl) return;
-  setProgress(5, "در حال ارسال درخواست...");
+  createWaitSquare();
+  setProgress(4, "در حال ارسال درخواست...");
   const t0 = Date.now();
   waitTimer = setInterval(() => {
     const el = (Date.now() - t0) / 1000;
-    const p = 5 + 83 * (1 - Math.exp(-el / 16));
+    const p = 4 + 86 * (1 - Math.exp(-el / 16));
     setProgress(p, "مدل فکری در حال فکر کردن و پاسخ...");
   }, 400);
 }
@@ -446,6 +475,8 @@ async function pollTask(tid) {
       // the loader must stay the LAST message: move it under the todo list
       const th = $("thinking");
       if (th && th.parentNode) th.parentNode.appendChild(th);
+      const ws = $("waitSquareMsg");
+      if (ws && ws.parentNode) ws.parentNode.appendChild(ws);
     }
 
     if (t.status === "running" || t.status === "queued" || t.status === "paused") {
@@ -465,10 +496,10 @@ async function pollTask(tid) {
       return;
     }
 
-    // finished - the answer is here: complete the bar, then remove it
-    stopPolling();
+    // finished - the answer is here: hit 100, burst the square, show reply
+    stopPolling(true);
     setProgress(100, "پاسخ آماده شد");
-    setTimeout(hideProgress, 900);
+    setTimeout(() => hideProgress(true), 180);
     removeThinking();
     controlsEl.hidden = true;
     taskStateEl.textContent = "";
@@ -511,13 +542,13 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-function stopPolling() {
+function stopPolling(keepSquare) {
   if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
   state.taskId = null;
   state.busy = false;
   controlsEl.hidden = true;
   setTaskStatus(null);
-  hideProgress();
+  if (!keepSquare) hideProgress(false);
 }
 
 /* --------------------------------------------------------------- send */
@@ -539,7 +570,6 @@ async function send(text, silentRetry) {
     lsAppend(state.sessionId, "user", text);
     heroEl.classList.remove("show");
   }
-  thinkingBubble();
   clearTodoLive();
   setTaskStatus("running");
   startWaiting();
@@ -760,39 +790,6 @@ async function loadMessages(sid) {
   scrollDown();
 }
 
-/* -------------------------------------------------------------- chips */
-const CHAT_SUGGESTIONS = [
-  "سلام چطوری",
-  "یک کد پایتون بنویس که فاکتوریل حساب کنه",
-  "سیاهچاله چیه؟",
-  "۲۵ × ۴ + ۱۰۰ چنده؟",
-  "2x + 3 = 11 چنده؟",
-  "این متن رو به انگلیسی ترجمه کن: برنامه‌نویسی مهارتی ارزشمند است",
-  "یه پرامپت حرفه‌ای بنویس برای ساخت رزومه",
-];
-
-const AGENT_SUGGESTIONS = [
-  "یک سایت درباره شبکه بساز با تم سایبرپانکی",
-  "یک بازی مار بساز با تم نئون",
-  "یک ماشین حساب گرافیکی بساز",
-  "یک برنامه پایتون بنویس که ۴ عدد را ضرب کند",
-  "یک صفحه فرود برای معرفی محصول بساز",
-  "رنگ دکمه‌ها را قرمز کن",
-];
-
-function renderChips() {
-  const wrap = $("chips");
-  if (!wrap) return;
-  const list = PAGE === "agent" ? AGENT_SUGGESTIONS : CHAT_SUGGESTIONS;
-  list.forEach((s) => {
-    const b = document.createElement("button");
-    b.className = "chip-sug";
-    b.textContent = s;
-    b.addEventListener("click", () => send(s));
-    wrap.appendChild(b);
-  });
-}
-
 /* -------------------------------------------------- agent tab settings */
 async function loadAgentConfig() {
   try {
@@ -864,7 +861,8 @@ function showWorkspace() {
 
 /* -------------------------------------------------------------- init */
 (async function init() {
-  renderChips();
+  const psAgent = $("psAgent");
+  if (psAgent) psAgent.addEventListener("click", () => showToast("قسمت Agent به‌زودی فعال می‌شود"));
   await loadModel();
   if (PAGE === "agent") {
     if ($("btnConnect")) $("btnConnect").addEventListener("click", connectAgent);

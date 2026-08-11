@@ -6,7 +6,6 @@ dist/
 .freebuff/
 memory.json
 projects/
-Learned/
 engine/
 models/
 runtime/

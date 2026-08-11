@@ -62,6 +62,19 @@ body {
   font-size: 14px;
 }
 
+/* faint CRT scanlines + grid - the hacker layer, behind everything */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(224, 36, 94, 0.025) 0 1px, transparent 1px 4px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+  background-size: 100% 4px, 44px 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* ambient glow - crimson like the logo's ring */
 body::before {
   content: "";
@@ -150,7 +163,8 @@ body::before {
   background: rgba(5, 6, 10, 0.7);
   backdrop-filter: blur(12px);
 }
-.brand { display: flex; align-items: center; gap: 12px; }
+.topbar-start { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .logo {
   width: 40px; height: 40px; border-radius: 50%;
   display: grid; place-items: center;
@@ -174,6 +188,33 @@ body::before {
   padding: 5px 10px; border-radius: 20px; white-space: nowrap;
 }
 .chip-path { direction: ltr; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+
+/* page switch - bottom-left, OUTSIDE the chat area; Agent is disabled for now */
+.page-switch {
+  position: fixed;
+  bottom: 16px; left: 16px;
+  z-index: 70;
+  display: flex; gap: 3px;
+  background: rgba(8, 6, 9, 0.92);
+  border: 1px solid rgba(224, 36, 94, 0.35);
+  border-radius: 12px; padding: 4px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55), 0 0 16px rgba(224, 36, 94, 0.12);
+}
+.ps-item {
+  padding: 7px 16px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 700; color: var(--muted);
+  text-decoration: none; cursor: pointer; transition: all .15s;
+  white-space: nowrap;
+}
+.ps-item:hover { color: var(--text); }
+.ps-item.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(224, 36, 94, 0.5);
+}
+.ps-item.disabled { opacity: .38; cursor: not-allowed; }
+.ps-item.disabled:hover { color: var(--muted); }
 
 /* -------------------------------------------------------------- chat */
 /* The app is RTL, but the scrollbar must sit on the RIGHT: the scroll
@@ -319,7 +360,7 @@ body::before {
   margin-bottom: 18px;
 }
 .hero-logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.hero-title { font-size: 26px; font-weight: 800; letter-spacing: .3px; }
+.hero-title { font-size: 26px; font-weight: 800; letter-spacing: .3px; text-shadow: 0 0 26px rgba(224, 36, 94, 0.6); }
 .hero-sub { color: var(--muted); max-width: 520px; margin-top: 10px; line-height: 1.9; font-size: 13.5px; }
 .chips { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; margin-top: 26px; max-width: 620px; }
 .chip-sug {
@@ -421,6 +462,56 @@ body::before {
   direction: ltr;
 }
 .wait-phase { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ------------------------------------------ wait square (0->100 morph)
+   Appears IN the chat as the last message while the brain thinks: a crimson
+   square with a spinning ring and the real 0-100 counter. On finish it
+   bursts (scale up + glow) and morphs away as the answer rises in. */
+.wait-msg { align-items: center; }
+.wait-square {
+  position: relative;
+  width: 112px; height: 112px;
+  border-radius: 18px;
+  background: radial-gradient(120% 120% at 50% 0%, #1d0f17, #080508 72%);
+  border: 1px solid rgba(224, 36, 94, 0.55);
+  box-shadow: 0 0 26px rgba(224, 36, 94, 0.35), inset 0 0 30px rgba(224, 36, 94, 0.14);
+  display: grid; place-items: center;
+  transition: transform .6s cubic-bezier(.6, -.2, .75, .4), opacity .5s, box-shadow .6s;
+  overflow: hidden;
+}
+.ws-ring {
+  position: absolute; inset: 8px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--accent), var(--accent-2), transparent 72%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+  animation: ws-spin 1.3s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(224, 36, 94, 0.7));
+}
+@keyframes ws-spin { to { transform: rotate(360deg); } }
+.ws-count {
+  position: relative;
+  font-family: var(--mono);
+  font-size: 32px; font-weight: 800;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 14px rgba(224, 36, 94, 0.9);
+  line-height: 1;
+  display: flex; align-items: baseline; gap: 2px;
+}
+.ws-pct { font-size: 12px; color: var(--accent-2); font-family: var(--font); }
+.ws-phase {
+  position: absolute; bottom: 9px; left: 0; right: 0;
+  text-align: center;
+  font-size: 10px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding: 0 8px;
+}
+.wait-square.burst {
+  transform: scale(1.7);
+  opacity: 0;
+  box-shadow: 0 0 80px rgba(224, 36, 94, 0.85), 0 0 160px rgba(255, 94, 58, 0.5);
+}
 .scroll-down {
   flex: none;
   height: 30px; padding: 0 12px; border-radius: 15px;
@@ -603,25 +694,21 @@ body::before {
 
 /* grid: the sandbox column collapses when hidden/missing (chat page) */
 .app { grid-template-columns: 250px 1fr auto; }
+.app > .sidebar { grid-column: 1; }
+.app > .main { grid-column: 2; }
 .sandbox { width: 320px; }
 
-/* ------------------------------------------ hamburger sidebar toggle */
-.burger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px; height: 38px;
-  margin-inline-start: 2px;
-  color: var(--muted);
-  border-radius: 10px;
-  flex-shrink: 0;
-}
-.burger:hover { color: var(--text); background: var(--bg-2); }
-/* closing the sidebar must WIDEN the chat: collapse its grid column to 0,
-   otherwise display:none drops main into the 250px column (the hamburger bug) */
+/* closing the sidebar must WIDEN the chat. The sidebar STAYS in the grid
+   (display:none would drop main into the 0px column and collapse the page -
+   the hamburger bug); it just shrinks to a zero-width sliver instead. */
 .app { transition: grid-template-columns 0.22s ease; }
 .app.sidebar-hidden { grid-template-columns: 0px 1fr auto; }
-.app.sidebar-hidden .sidebar { display: none; }
+.app.sidebar-hidden .sidebar {
+  width: 0; min-width: 0;
+  padding: 0; border: 0;
+  overflow: hidden; opacity: 0;
+  pointer-events: none;
+}
 .sidebar-backdrop {
   display: none;
   position: fixed; inset: 0;
@@ -717,6 +804,9 @@ body::before {
   .controls .btn { padding: 7px 10px; font-size: 12px; }
   .composer-rail { padding: 0 2px 6px; }
   .wait-progress { max-width: 100%; }
+  /* on mobile the composer is full-width: lift the page switch above it */
+  .page-switch { bottom: 86px; left: 10px; padding: 3px; border-radius: 10px; }
+  .ps-item { padding: 6px 12px; font-size: 12px; }
   .msg-side { top: -10px; inset-inline-start: 30px; }
   .msg .avatar { width: 28px; height: 28px; font-size: 12px; }
   .bubble h3 { font-size: 13.5px; }
