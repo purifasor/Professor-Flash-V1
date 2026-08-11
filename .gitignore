@@ -14,3 +14,4 @@ api/__pycache__/
 *.log
 
 .vercel
+pf_history.json
