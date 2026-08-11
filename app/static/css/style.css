@@ -617,6 +617,10 @@ body::before {
   flex-shrink: 0;
 }
 .burger:hover { color: var(--text); background: var(--bg-2); }
+/* closing the sidebar must WIDEN the chat: collapse its grid column to 0,
+   otherwise display:none drops main into the 250px column (the hamburger bug) */
+.app { transition: grid-template-columns 0.22s ease; }
+.app.sidebar-hidden { grid-template-columns: 0px 1fr auto; }
 .app.sidebar-hidden .sidebar { display: none; }
 .sidebar-backdrop {
   display: none;
@@ -680,9 +684,43 @@ body::before {
   .sandbox { display: none; }
 }
 @media (max-width: 760px) {
+  /* mobile mini-app: full-bleed chat, floating composer, compact chrome */
   .app { grid-template-columns: 1fr; }
   .sidebar { display: none; }
-  .msg .bubble { max-width: 92%; }
+  .msg .bubble { max-width: 88%; }
+  .topbar { padding: 8px 10px; gap: 8px; }
+  .topbar .brand-sub { display: none; }
+  .topbar-info .chip { font-size: 11px; padding: 3px 8px; }
+  .topbar-info .chip-path { display: none; }
+  .brand-name { font-size: 14px; }
+  .logo { width: 34px; height: 34px; }
+  .burger { width: 36px; height: 36px; }
+  .hero { padding: 26px 14px 14px; }
+  .hero-logo { width: 92px; height: 92px; }
+  .hero-title { font-size: 21px; }
+  .chips { padding: 0 10px 8px; }
+  .chip-item { padding: 7px 12px; font-size: 12px; }
+  .chat { padding: 12px 10px 96px; }
+  .msg { padding: 4px 0 12px; }
+  .composer-wrap {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(180deg, rgba(10, 8, 11, 0), var(--bg) 30%);
+  }
+  .composer {
+    border-radius: 18px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+  }
+  .composer textarea { font-size: 15px; padding: 11px 14px; }
+  .composer .btn.send { width: 42px; height: 42px; margin: 5px 4px 5px 6px; }
+  .controls { flex-wrap: wrap; gap: 6px; }
+  .controls .btn { padding: 7px 10px; font-size: 12px; }
+  .composer-rail { padding: 0 2px 6px; }
+  .wait-progress { max-width: 100%; }
+  .msg-side { top: -10px; inset-inline-start: 30px; }
+  .msg .avatar { width: 28px; height: 28px; font-size: 12px; }
+  .bubble h3 { font-size: 13.5px; }
+  .scroll-down { bottom: 6px; }
 }
 
 /* cloud build delivery: zip download button */

