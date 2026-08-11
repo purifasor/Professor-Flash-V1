@@ -107,17 +107,51 @@ function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/* ------- lightweight markdown for messages: headings, lists, hr, bold,
+   inline code - so model answers are structured and easy to read. Everything
+   is HTML-escaped first (safe), code fences stay untouched. */
+function inlineMd(s) {
+  let t = esc(s);
+  t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  return t;
+}
+
+function mdToHtml(text) {
+  const lines = String(text).split("\n");
+  let html = "";
+  let listType = null;
+  const closeList = () => { if (listType) { html += "</" + listType + ">"; listType = null; } };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) { closeList(); continue; }
+    m = line.match(/^(#{1,4})\s+(.*)$/);
+    if (m) { closeList(); const lv = m[1].length; html += `<h${lv}>${inlineMd(m[2])}</h${lv}>`; continue; }
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { closeList(); html += "<hr>"; continue; }
+    m = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (m) { if (listType !== "ul") { closeList(); html += "<ul>"; listType = "ul"; } html += `<li>${inlineMd(m[1])}</li>`; continue; }
+    m = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (m) { if (listType !== "ol") { closeList(); html += "<ol>"; listType = "ol"; } html += `<li>${inlineMd(m[1])}</li>`; continue; }
+    closeList();
+    html += `<p>${inlineMd(line)}</p>`;
+  }
+  closeList();
+  return html;
+}
+
 /* Render message text: fenced code blocks (```) become styled <pre> blocks,
-   everything else stays as normal escaped text. */
+   everything else gets the light markdown treatment above. */
 function renderContent(text) {
   const parts = String(text).split(/```/);
-  if (parts.length === 1) return esc(text);
+  if (parts.length === 1) return mdToHtml(text);
   let html = "";
   let codeId = 0;
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
     if (i % 2 === 0) {
-      if (p) html += esc(p);
+      if (p) html += mdToHtml(p);
     } else {
       let lang = "";
       let code = p;
@@ -201,6 +235,11 @@ async function loadModel() {
 }
 
 /* ------------------------------------------------------------ messages */
+function avatarHtml(role) {
+  if (role === "user") return '<div class="avatar">شما</div>';
+  return '<div class="avatar"><img src="/img/logo-128.png" alt="PF"></div>';
+}
+
 function addMessage(role, text, mid, animate) {
   const wrap = document.createElement("div");
   wrap.className = "msg " + (role === "user" ? "user" : "bot");
@@ -209,7 +248,7 @@ function addMessage(role, text, mid, animate) {
   const actions = `<button class="act-copy" title="کپی پیام">${icon("copy")}</button>`;
   wrap.dataset.raw = String(text);
   wrap.innerHTML = `
-    <div class="avatar">${role === "user" ? "شما" : "PF"}</div>
+    ${avatarHtml(role)}
     <div class="bubble">${renderContent(text)}</div>
     <div class="msg-side">${actions}</div>`;
   chatEl.appendChild(wrap);
@@ -223,7 +262,7 @@ function setTodoLive(todos) {
   if (!todoLiveEl) {
     todoLiveEl = document.createElement("div");
     todoLiveEl.className = "msg bot";
-    todoLiveEl.innerHTML = `<div class="avatar">PF</div><div class="bubble todo-live"></div>`;
+    todoLiveEl.innerHTML = `${avatarHtml("bot")}<div class="bubble todo-live"></div>`;
     chatEl.appendChild(todoLiveEl);
   }
   const box = todoLiveEl.querySelector(".todo-live");
@@ -252,7 +291,7 @@ function thinkingBubble() {
   wrap.className = "msg bot";
   wrap.id = "thinking";
   wrap.innerHTML = `
-    <div class="avatar">PF</div>
+    ${avatarHtml("bot")}
     <div class="bubble thinking">
       <div class="spinner"></div>
       <span class="think-text">در حال تفکر...</span>
@@ -295,6 +334,44 @@ $("chatScroll").addEventListener("scroll", () => {
   $("btnScrollDown").hidden = nearBottom();
 });
 $("btnScrollDown").addEventListener("click", () => scrollDown(true));
+
+/* ------------------------------------------------ wait progress 0->100
+   A real expectation bar: it appears when a message is sent and is driven
+   by the actual time the server spends answering (it only finishes when the
+   reply actually arrives). Removed the moment the answer is delivered. */
+const waitEl = $("waitProgress");
+const waitFill = $("waitFill");
+const waitLabel = $("waitLabel");
+const waitPhase = $("waitPhase");
+let waitTimer = null;
+
+function setProgress(pct, phase) {
+  if (!waitEl) return;
+  waitEl.hidden = false;
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  waitFill.style.width = p + "%";
+  waitLabel.textContent = p + "%";
+  if (phase) waitPhase.textContent = phase;
+}
+
+function hideProgress() {
+  if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+  if (waitEl) waitEl.hidden = true;
+}
+
+/* while the /api/chat request is in flight (the real thinking time), advance
+   the bar on a decelerating curve tied to elapsed seconds - it can only
+   reach ~88% while waiting, the last jump happens when the answer arrives */
+function startWaiting() {
+  if (!waitEl) return;
+  setProgress(5, "در حال ارسال درخواست...");
+  const t0 = Date.now();
+  waitTimer = setInterval(() => {
+    const el = (Date.now() - t0) / 1000;
+    const p = 5 + 83 * (1 - Math.exp(-el / 16));
+    setProgress(p, "مدل فکری در حال فکر کردن و پاسخ...");
+  }, 400);
+}
 
 /* ------------------------------------------------------------- sandbox */
 function setTaskStatus(status) {
@@ -359,12 +436,21 @@ async function pollTask(tid) {
       $("btnPause").disabled = t.status !== "running";
       $("btnResume").disabled = t.status !== "paused";
       taskStateEl.textContent = t.status === "queued" ? "پیام شما در صف است؛ بعد از کار جاری پاسخ می‌دهم" : "";
+      // real task progress: builds expose a todo checklist - tick it live
+      if (t.todos && t.todos.length) {
+        const done = t.todos.filter((x) => x.done).length;
+        setProgress(88 + Math.round(11 * done / t.todos.length), "در حال انجام کارها (" + done + "/" + t.todos.length + ")...");
+      } else if (t.status === "queued") {
+        setProgress(84, "در صف انتظار...");
+      }
       state.pollTimer = setTimeout(() => pollTask(tid), 700);
       return;
     }
 
-    // finished
+    // finished - the answer is here: complete the bar, then remove it
     stopPolling();
+    setProgress(100, "پاسخ آماده شد");
+    setTimeout(hideProgress, 900);
     removeThinking();
     controlsEl.hidden = true;
     taskStateEl.textContent = "";
@@ -401,6 +487,7 @@ function stopPolling() {
   state.busy = false;
   controlsEl.hidden = true;
   setTaskStatus(null);
+  hideProgress();
 }
 
 /* --------------------------------------------------------------- send */
@@ -422,6 +509,7 @@ async function send(text) {
   thinkingBubble();
   clearTodoLive();
   setTaskStatus("running");
+  startWaiting();
 
   // the server never stores chats: it gets this client's recent context with
   // each request and forgets it - history stays private on this machine
@@ -438,10 +526,14 @@ async function send(text) {
     const data = await r.json();
     if (!r.ok) {
       removeThinking();
+      hideProgress();
       addNote("خطا: " + (data.error || "نامشخص"));
       state.busy = false;
       return;
     }
+    // request returned: the brain finished - jump to the final stretch
+    if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+    setProgress(90, "در حال دریافت پاسخ...");
     if (data.sessionId) state.sessionId = data.sessionId;
     if (data.control) {
       removeThinking();
@@ -471,6 +563,7 @@ async function send(text) {
       }
     } catch (e2) { /* give up below */ }
     removeThinking();
+    hideProgress();
     addNote("اتصال به سرور برقرار نشد. دوباره تلاش کن.");
     state.busy = false;
   }
@@ -515,10 +608,8 @@ $("btnStop").addEventListener("click", async () => {
 
 /* ----------------------------------------------------------- messages */
 chatEl.addEventListener("click", async (e) => {
-  const bubble = e.target.closest(".bubble");
-  if (!bubble) return;
-  const wrap = bubble.closest(".msg");
-  const mid = wrap.dataset.mid;
+  const wrap = e.target.closest(".msg");
+  if (!wrap) return;
 
   if (e.target.closest(".code-copy")) {
     const btn = e.target.closest(".code-copy");
@@ -528,10 +619,12 @@ chatEl.addEventListener("click", async (e) => {
     return;
   }
 
+  // copy the WHOLE message text (the button lives outside the bubble, so it
+  // must be handled before any .bubble check)
   if (e.target.closest(".act-copy")) {
-    const text = wrap.dataset.raw || bubble.textContent;
+    const text = wrap.dataset.raw || "";
     await copyText(text);
-    addNote("کپی شد.");
+    addNote("پیام کپی شد.");
     return;
   }
 });

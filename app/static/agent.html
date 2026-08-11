@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Professor Flash V1 - Agent</title>
+<link rel="icon" type="image/png" href="/img/logo-64.png">
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body data-page="agent">
@@ -31,7 +32,7 @@
   <main class="main">
     <header class="topbar">
       <div class="brand">
-        <div class="logo">PF</div>
+        <div class="logo"><img src="/img/logo-128.png" alt="Professor Flash"></div>
         <div>
           <div class="brand-name">Professor Flash <span class="version">V1</span></div>
           <div class="brand-sub" id="brandSub">Agent - فکر می‌کند، فایل می‌سازد، تست و تحویل می‌دهد</div>
@@ -71,13 +72,10 @@
     <!-- ============ workspace (after connect) ============ -->
     <div class="workspace" id="workspace" hidden>
       <div class="chat-scroll" id="chatScroll">
-        <button class="scroll-down" id="btnScrollDown" hidden title="برو به پایین">
-          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
         <div class="chat" id="chat"></div>
 
         <div class="hero" id="hero">
-          <div class="hero-logo">PF</div>
+          <div class="hero-logo"><img src="/img/logo-256.png" alt="Professor Flash"></div>
           <h1 class="hero-title">Agent Professor Flash</h1>
           <p class="hero-sub">اینجا Agent اجازه همه کارها را دارد: تحلیل درست، برنامه کار (Todo)، ساخت فایل، عکس، انیمیشن، تست و تحویل. کیفیت مهم‌تر از سرعت است.</p>
           <div class="chips" id="chips"></div>
@@ -85,6 +83,17 @@
       </div>
 
       <div class="composer-wrap">
+        <div class="composer-rail">
+          <div class="wait-progress" id="waitProgress" hidden>
+            <div class="wait-track"><div class="wait-fill" id="waitFill"></div></div>
+            <span class="wait-label" id="waitLabel">0%</span>
+            <span class="wait-phase" id="waitPhase">در حال ارسال...</span>
+          </div>
+          <button class="scroll-down" id="btnScrollDown" hidden title="برو به آخرین پیام">
+            <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            برو به آخر
+          </button>
+        </div>
         <div class="controls" id="controls" hidden>
           <button class="btn ctrl" id="btnPause" title="توقف موقت">
             <svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
