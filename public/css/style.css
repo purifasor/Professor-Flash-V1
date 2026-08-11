@@ -437,7 +437,7 @@ body::before {
 /* markdown-ish structure inside assistant messages: headings, lists, hr,
    bold, inline code - all visually distinct from plain body text */
 .bubble h1, .bubble h2, .bubble h3, .bubble h4 {
-  color: var(--accent);
+  color: var(--text);
   font-weight: 800;
   line-height: 1.5;
   margin: 18px 0 8px;

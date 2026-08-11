@@ -990,6 +990,9 @@ SAFETY_RE = re.compile(
     r"در عوض،؟ می‌توانم|در عوض می توانم|به جای آن می‌توانم|به جای ان میتونم|در مورد موضوعات (دیگر|دیگری) (کمک|صحبت)|موضوع (دیگری|دیگر) را انتخاب|بهتر است (موضوع|در مورد) (دیگری|دیگر)|"
     r"می‌توانم در مورد (موضوع|چیز) (دیگری|دیگر)|می‌تونم در مورد (موضوع|چیز) (دیگری|دیگر)|بریم سراغ (موضوع|چیز) (دیگری|دیگر)|"
     r"i (can|'d be happy to) help with (something|anything) else|is there anything else i can (help|assist)|instead,? (i can|let me|why don'?t we)|let's talk about something else|i can assist with other topics|"
+    r"هشدار: |هشدار : |غیرقانونی و (غیراخلاقی|غیر مجاز)|غیراخلاقی (است|است.|می‌باشد)|"
+    r"این پاسخ (تنها|فقط|صرفا|صرفاً) (برای|جهت)|فقط (برای|جهت) (آموزش|اطلاع)|(اهداف|مقاصد) (آموزشی|علمی|اطلاع)|جنبه (آموزشی|اطلاع‌رسانی)|فقط جنبه|"
+    r"(صرفا|صرفاً) (برای|جهت)|for (informational|educational|information|academic) purposes? only|this (response|answer|information) is (provided )?for (informational|educational)|it is illegal and unethical|is (highly )?illegal and unethical|i cannot provide instructions for|educational purposes only|"
     r"لطفا(ی)? (توجه|دقت) کنید|توجه: |نکته: "
     r"هرگونه (فکر|افکار|اندیشه|نیت) (خودکشی|انتحار)|نشانه(ای|‌هایی)? از (درد|رنج)(های)? عمیق|"
     r"با کسی صحبت (کن|کنید)|با (یک|یک نفر) (حرف|صحبت) بزن|کمک (بگیر|بگیرید)|از (کسی|متخصص) کمک|تقاضای کمک|"
@@ -1013,7 +1016,7 @@ _CURLY = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'",
 
 
 def _is_refusal(text):
-    t = str(text)[:500].translate(_CURLY)
+    t = str(text).translate(_CURLY)
     if not t:
         return False
     # ZWNJ-insensitive: test the text both raw (matches «نمی‌توانم» patterns)
@@ -1023,6 +1026,24 @@ def _is_refusal(text):
             or SAFETY_RE.search(t) or SAFETY_RE.search(t2))
 
 
+# Lectures often land at the END of an otherwise good answer (the head-only
+# check above misses them). Targeted tail patterns - specific enough not to
+# false-positive on normal advice endings.
+_LECTURE_TAIL = re.compile(
+    r"هشدار: |توجه: |غیرقانونی و (غیراخلاقی|غیر مجاز)|غیراخلاقی (است|می‌باشد)|"
+    r"برای (اهداف|مقاصد) (آموزشی|علمی|اطلاع)|این پاسخ (تنها|فقط|صرفا|صرفاً) (برای|جهت)|"
+    r"for (informational|educational|information|academic) purposes? only|illegal and unethical|educational purposes only",
+    re.I,
+)
+
+
+def _has_tail_lecture(text):
+    if not text:
+        return False
+    t = re.sub(r"[*_#`]", "", str(text)[-700:]).translate(_CURLY)
+    return bool(_LECTURE_TAIL.search(t))
+
+
 def _strip_refusal(text):
     """Keep only the non-refusal parts; return "" if nothing useful remains."""
     parts = re.split(r"\n\n+", str(text).strip())
@@ -1030,8 +1051,10 @@ def _strip_refusal(text):
     for p in parts:
         pn = p.translate(_CURLY)
         pn2 = pn.replace("\u200c", "")
+        pn3 = re.sub(r"[*_#`]", "", pn[:200])
         if not (REFUSAL_RE.search(pn[:200]) or REFUSAL_RE.search(pn2[:200])
-                or SAFETY_RE.search(pn[:200]) or SAFETY_RE.search(pn2[:200])):
+                or SAFETY_RE.search(pn[:200]) or SAFETY_RE.search(pn2[:200])
+                or _LECTURE_TAIL.search(pn3)):
             kept.append(p)
     return "\n\n".join(kept).strip() if kept else ""
 
@@ -1190,8 +1213,12 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0):
         return max(3.0, chain_deadline - time.time() - margin)
 
     def ok(t):
-        return bool(t) and not (_is_refusal(t) or _is_short_evasion(t, user_text)
-                                or _is_garbage(t))
+        if not t:
+            return False
+        if (_is_refusal(t) or _is_short_evasion(t, user_text)
+                or _is_garbage(t) or _has_tail_lecture(t)):
+            return False
+        return True
 
     full = [{"role": "system", "content": system}] + messages
     out, prov = brain(full, timeout=min(timeout, remain()), max_tokens=max_tokens, skip=refused)
