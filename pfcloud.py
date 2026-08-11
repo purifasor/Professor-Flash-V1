@@ -745,17 +745,16 @@ def _pollinations(messages, timeout=8, max_tokens=1200, skip=None):
     return None
 
 
-LLM7_URL = "https://api.llm7.io/v1/chat/completions"
 KILO_URL = "https://api.kilo.ai/api/gateway/chat/completions"
 OVH_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions"
 
 # Quality-first chain, all verified live from Vercel's servers:
-# OVH now hosts true giants - Qwen3.5-397B-A17B (a 397B MoE) and
-# gpt-oss-120b - alongside the 70B/32B workhorses. LLM7's free tier is led
-# by minimax-m2.7 (MiniMax-M2, a 78B MoE). The small gpt-oss:20b/gemma4:31b
-# are dropped: too weak, and they caused the «موتور فکری LLM7 gpt-oss:20b»
-# the user asked to remove. (Inkling variants on LLM7 need an API key.)
-LLM7_MODELS = ["minimax-m2.7", "mistral-Nemo-Instruct-2407"]
+# OVH hosts true giants - Qwen3.5-397B-A17B (a 397B MoE), Meta-Llama-3.3-70B
+# and gpt-oss-120b - alongside the 32B/27B workhorses. Kilo is the anonymous
+# OpenRouter-free catch-all (routes to whatever strong free model is up).
+# LLM7 (api.llm7.io) is BANNED PERMANENTLY - see the provider-ban rule in
+# Model/directives.md: its free tier was weak, refused requests and saturated
+# («سرویس‌های رایگان شلوغ بودند») - the brain never connects to it, ever.
 KILO_MODELS = ["openrouter/free", "kilo-auto/free"]
 OVH_MODELS = ["Qwen3.5-397B-A17B", "Meta-Llama-3_3-70B-Instruct", "gpt-oss-120b",
               "Qwen3-32B", "Qwen3.6-27B", "Qwen3-Coder-30B-A3B-Instruct",
@@ -774,9 +773,9 @@ def _load_model_registry():
 
 _REG = _load_model_registry()
 if _REG:
-    if "LLM7" in _REG:
-        LLM7_URL = _REG["LLM7"]["url"]
-        LLM7_MODELS = _REG["LLM7"]["models"]
+    # LLM7 is banned permanently (see Model/directives.md): even if a registry
+    # file ever lists it again, it is stripped out and never loaded.
+    _REG.pop("LLM7", None)
     if "Kilo" in _REG:
         KILO_URL = _REG["Kilo"]["url"]
         KILO_MODELS = _REG["Kilo"]["models"]
@@ -841,10 +840,6 @@ def _try_completions(url, models, messages, timeout, max_tokens, label, skip=Non
     return None
 
 
-def _llm7(messages, timeout=8, max_tokens=1200, skip=None):
-    return _try_completions(LLM7_URL, LLM7_MODELS, messages, timeout, max_tokens, "LLM7", skip)
-
-
 def _kilo(messages, timeout=8, max_tokens=1200, skip=None):
     return _try_completions(KILO_URL, KILO_MODELS, messages, timeout, max_tokens, "Kilo", skip)
 
@@ -876,7 +871,7 @@ def _parallel_sweep(messages, timeout, max_tokens, skip):
             pass
 
     threads = [threading.Thread(target=run, args=(p, lbl), daemon=True)
-               for p, lbl in ((_ovh, "OVH"), (_kilo, "Kilo"), (_llm7, "LLM7"))]
+               for p, lbl in ((_ovh, "OVH"), (_kilo, "Kilo"))]
     for t in threads:
         t.start()
     done.wait(timeout)
@@ -1555,7 +1550,6 @@ def _brand(prov):
         "Qwen3.5-397B-A17B": "397B", "gpt-oss-120b": "120B", "gpt-oss-20b": "20B",
         "Meta-Llama-3_3-70B-Instruct": "70B", "Qwen3-32B": "32B", "Qwen3.6-27B": "27B",
         "Qwen3-Coder-30B-A3B-Instruct": "30B", "Mistral-Small-3.2-24B-Instruct-2506": "24B",
-        "minimax-m2.7": "78B", "mistral-Nemo-Instruct-2407": "12B", "gemma4:31b": "31B",
     }
     name = (prov or "").split(" (")[0]
     model = name.split(" ", 1)[1] if " " in name else name
@@ -1568,7 +1562,7 @@ def _brand(prov):
 
 
 def _prov_keys(prov):
-    """Map a provider label ("LLM7 gemma4:31b (رایگان)") to its PROV_STATE key(s)."""
+    """Map a provider label ("OVH Meta-Llama-3_3-70B-Instruct (رایگان)") to its PROV_STATE key(s)."""
     try:
         name = (prov or "").split(" (")[0]
         if " " in name:
@@ -1583,7 +1577,7 @@ def _mark_prov_cooldown(prov, secs=45):
     """Park the refusing provider+model so the next attempt rotates elsewhere.
 
     Keys in PROV_STATE are built as `Label:model` in _try_completions
-    (e.g. "LLM7:gpt-oss:20b"), so we must rebuild the exact same key.
+    (e.g. "OVH:Qwen3.5-397B-A17B"), so we must rebuild the exact same key.
     """
     for key in _prov_keys(prov):
         _mark(key, secs)

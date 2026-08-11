@@ -13,14 +13,6 @@
       "rate": "~2 rpm shared"
     },
     {
-      "provider": "LLM7",
-      "url": "https://api.llm7.io/v1/chat/completions",
-      "models": ["minimax-m2.7", "mistral-Nemo-Instruct-2407"],
-      "free": true,
-      "key": null,
-      "rate": "~30 rpm"
-    },
-    {
       "provider": "Kilo",
       "url": "https://api.kilo.ai/api/gateway/chat/completions",
       "models": ["openrouter/free", "kilo-auto/free"],

@@ -37,8 +37,25 @@ every call in a 3-level override:
 
 ## Model Registry
 
-See `models.json` for the connected free anonymous providers (LLM7, Kilo, OVH)
+See `models.json` for the connected free anonymous providers (Kilo, OVH)
 and optional premium env keys (Gemini / DeepSeek / OpenRouter).
+
+## Provider Ban — LLM7 (PERMANENT)
+
+**`api.llm7.io` (provider "LLM7") is permanently banned.** The brain must
+never connect to it, under any circumstance:
+
+- LLM7's free tier was weak (gpt-oss:20b / gemma4:31b / mistral-Nemo),
+  refused the user's requests, and saturated into
+  «سرویس‌های رایگان شلوغ بودند؛ تلاش مجدد خودکار» instead of answering.
+- `pfcloud.py` strips `LLM7` from `Model/models.json` at load time
+  (`_REG.pop("LLM7", None)`) and does not define any LLM7 endpoint, so even
+  a registry edit can never re-enable it.
+- The brain pool is: **OVH** (Qwen3.5-397B, Meta-Llama-3.3-70B, gpt-oss-120b,
+  Qwen3-32B, ...) and **Kilo** (anonymous OpenRouter-free catch-all).
+  If a future provider is added to `models.json`, it must be verified live
+  from Vercel's servers BEFORE being enabled — a provider that refuses or
+  saturates is removed, never patched around.
 
 ## Safety-Tone Detection (non-answers)
 
@@ -106,7 +123,7 @@ different users' chats can never mix.
 - **Answer gates**: refusal/safety-lecture detection is ZWNJ- and curly-apostrophe-insensitive; garbage outputs (CJK leaks) and short evasions («نمیتوانید») are rejected and retried on fresh models — a refusal can never surface as the answer.
 
 ## Update (2026-08-11) — v1.0.7: unlimited pool, PRF branding, weapons knowledge
-- Brain pool widened to 4 parallel providers: OVH-70B, LLM7, Kilo, Pollinations (no-key, UA-fixed). First strong answer wins; chain deadline keeps every request inside Vercel's window.
+- Brain pool widened to 4 parallel providers: OVH-70B, LLM7, Kilo, Pollinations (no-key, UA-fixed). First strong answer wins; chain deadline keeps every request inside Vercel's window. (LLM7 and Pollinations have since been removed: LLM7 is permanently banned — see the Provider Ban rule above — and Pollinations' legacy API was deprecated.)
 - Client auto-retry: a «شلوغ بود» rate-limit hiccup is retried automatically 3x with backoff instead of showing a dead end.
 - PRF branding: the badge now shows the real model parameter, e.g. «موتور فکری: PRF 70B» / PRF 31B / PRF 32B.
 - Knowledge/Skills sync from the GitHub repo on startup (raw.githubusercontent) - repo updates reach the live model without redeploys.
