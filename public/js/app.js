@@ -400,15 +400,20 @@ function hideProgress(burst) {
   }
 }
 
+/* the counter is tied to REAL server activity: it creeps slowly on a timer so
+   it never freezes on one number, then JUMPS on each real poll event (new
+   logs / todo steps done), and only reaches 100 when the answer arrives. */
+let lastLogLen = 0;
 function startWaiting() {
   createWaitSquare();
+  lastLogLen = 0;
   setProgress(4, "در حال ارسال درخواست...");
   const t0 = Date.now();
   waitTimer = setInterval(() => {
     const el = (Date.now() - t0) / 1000;
-    const p = 4 + 86 * (1 - Math.exp(-el / 16));
+    const p = 4 + 86 * (1 - Math.exp(-el / 26));
     setProgress(p, "مدل فکری در حال فکر کردن و پاسخ...");
-  }, 400);
+  }, 500);
 }
 
 /* ------------------------------------------------------------- sandbox */
@@ -476,10 +481,15 @@ async function pollTask(tid) {
       $("btnPause").disabled = t.status !== "running";
       $("btnResume").disabled = t.status !== "paused";
       taskStateEl.textContent = t.status === "queued" ? "پیام شما در صف است؛ بعد از کار جاری پاسخ می‌دهم" : "";
-      // real task progress: builds expose a todo checklist - tick it live
+      // real task progress: builds expose a todo checklist - tick it live;
+      // otherwise new server logs are REAL activity, so jump the counter
       if (t.todos && t.todos.length) {
         const done = t.todos.filter((x) => x.done).length;
         setProgress(88 + Math.round(11 * done / t.todos.length), "در حال انجام کارها (" + done + "/" + t.todos.length + ")...");
+      } else if (t.logs && t.logs.length > lastLogLen) {
+        lastLogLen = t.logs.length;
+        const cur = parseInt((($("wsCount") || {}).textContent || "4"), 10) || 4;
+        setProgress(Math.min(92, cur + 5), "مدل فکری در حال کار...");
       } else if (t.status === "queued") {
         setProgress(84, "در صف انتظار...");
       }
@@ -487,10 +497,12 @@ async function pollTask(tid) {
       return;
     }
 
-    // finished - the answer is here: hit 100, burst the square, show reply
+    // finished - the answer is here: hit 100, burst the square, remove the
+    // todo checklist too, then show the reply
     stopPolling(true);
     setProgress(100, "پاسخ آماده شد");
     setTimeout(() => hideProgress(true), 180);
+    clearTodoLive();
     removeThinking();
     controlsEl.hidden = true;
     taskStateEl.textContent = "";

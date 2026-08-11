@@ -279,9 +279,12 @@ def main():
 
     sys.path.insert(0, PROJECT_DIR)
 
-    # launch the server in a thread so run.py stays a friendly console
+    # launch the server in a thread so run.py stays a friendly console.
+    # The same cloud brain (pfcloud.py) powers BOTH this local server and the
+    # deployed site - freedom layer, Read-Prompt, refusal gates and the free
+    # giant-model chain - so `python run.py` behaves exactly like the site.
     def serve():
-        from app.server import app
+        from pfcloud import app
         app.run(host=HOST, port=port, threaded=True, use_reloader=False)
 
     t = threading.Thread(target=serve, daemon=True)
