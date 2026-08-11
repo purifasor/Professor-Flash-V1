@@ -440,21 +440,27 @@ body::before {
   color: var(--accent);
   font-weight: 800;
   line-height: 1.5;
-  margin: 14px 0 6px;
+  margin: 18px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed rgba(224, 36, 94, 0.22);
 }
 .bubble h3 { font-size: 14.5px; }
 .bubble h2 { font-size: 16px; }
 .bubble h1 { font-size: 17.5px; }
+.bubble h4 { font-size: 14px; margin: 16px 0 6px; border-bottom: none; }
 .bubble h3::before { content: "◆ "; color: var(--accent); font-size: 11px; }
+.bubble h4::before { content: "◈ "; color: var(--accent); font-size: 11px; }
 .bubble strong { color: #ffe3ea; font-weight: 700; }
 .bubble em { color: var(--muted); }
 .bubble hr {
-  border: none; height: 1px; margin: 12px 0;
-  background: linear-gradient(90deg, transparent, rgba(224,36,94,.5), transparent);
+  border: none; height: 1px; margin: 16px 0;
+  background: linear-gradient(90deg, transparent, rgba(224,36,94,.55), transparent);
 }
-.bubble ul, .bubble ol { margin: 6px 0; padding-right: 22px; }
-.bubble li { margin: 4px 0; line-height: 1.9; }
-.bubble li::marker { color: var(--accent); }
+.bubble ul, .bubble ol { margin: 8px 0; padding-right: 24px; }
+.bubble li { margin: 7px 0; line-height: 1.95; }
+.bubble li::marker { color: var(--accent); font-weight: 700; }
+.bubble li > strong:first-child { color: #ffd9e4; }
+.bubble p { margin: 8px 0; }
 .bubble code:not(.code-block code) {
   font-family: var(--mono); font-size: 12px;
   background: rgba(224, 36, 94, 0.12);
@@ -599,6 +605,64 @@ body::before {
 .app { grid-template-columns: 250px 1fr auto; }
 .sandbox { width: 320px; }
 
+/* ------------------------------------------ hamburger sidebar toggle */
+.burger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px; height: 38px;
+  margin-inline-start: 2px;
+  color: var(--muted);
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.burger:hover { color: var(--text); background: var(--bg-2); }
+.app.sidebar-hidden .sidebar { display: none; }
+.sidebar-backdrop {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 54;
+}
+.app.sidebar-open .sidebar-backdrop { display: block; }
+@media (max-width: 760px) {
+  .sidebar {
+    display: none;
+    position: fixed; top: 0; bottom: 0; inset-inline-start: 0;
+    z-index: 60;
+    width: min(85vw, 310px);
+    box-shadow: 12px 0 40px rgba(0, 0, 0, 0.55);
+    border-inline-end: 1px solid var(--line);
+  }
+  .app.sidebar-open .sidebar { display: flex; }
+}
+
+/* ------------------------------------------ answer layout polish */
+.bubble h3, .bubble h4 {
+  margin: 18px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(224, 36, 94, 0.18);
+  line-height: 1.6;
+}
+.bubble h3:first-child, .bubble h4:first-child { margin-top: 4px; }
+.bubble p { margin: 8px 0; line-height: 1.9; }
+.bubble ul, .bubble ol { margin: 8px 0; padding-inline-start: 22px; }
+.bubble li { margin: 6px 0; line-height: 1.85; }
+.bubble hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 16px 0;
+  opacity: 0.9;
+}
+.bubble blockquote {
+  margin: 10px 0;
+  padding: 8px 14px;
+  border-inline-start: 3px solid var(--accent);
+  background: rgba(224, 36, 94, 0.07);
+  border-radius: 6px;
+  color: var(--text);
+}
+
 /* ------------------------------------------ copy button ABOVE message */
 .msg { position: relative; }
 .msg-side {
@@ -640,3 +704,25 @@ body::before {
 }
 .dl-btn:hover { background: rgba(224, 36, 94, 0.2); transform: translateY(-1px); }
 .dl-btn svg { width: 15px; height: 15px; }
+
+/* toast notification (copy feedback etc.) - top center, auto-fades */
+.toast {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  background: var(--panel-2);
+  border: 1px solid rgba(224, 36, 94, 0.5);
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 8px 18px;
+  border-radius: 22px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55), 0 0 18px rgba(224, 36, 94, 0.25);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s, transform .22s;
+  z-index: 99;
+  font-family: var(--font);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err { border-color: var(--err); box-shadow: 0 8px 30px rgba(0,0,0,.55), 0 0 18px rgba(248,113,113,.3); }

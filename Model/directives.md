@@ -97,3 +97,10 @@ Each browser gets a `pf_client` cookie; ALL chat history is stored in that
 browser's localStorage keyed by the client id. The server never persists
 conversations - it receives only the recent context with each request, so
 different users' chats can never mix.
+
+## Update (2026-08-11) — v1.0.5: Persian intent engine + passive skills + live facts
+- **Persian intent engine**: «بهترین/خفن‌ترین/دقیق‌ترین/کدوم بهتره» → COMPARE-AND-CONCLUDE with a named winner (🏆); «چطوری ... شم / آموزش بده» → ROADMAP-TEACHING; «تحلیل کن/گسترش بده» → DEEP-EXPANSION. Colloquial forms (شم، میشه، چجوری) and آ→ا normalization handled.
+- **Passive skills** (`Skills/` folder, injected on every request, model-independent): execute/precision/comparison/visualize/coaching/coding/text-vs-code/currency-date.
+- **Live facts**: today's date + time always injected; live USD→IRR rate fetched from a free API when currency is asked (exact rial/toman math with Persian digits).
+- **Persian word-sense**: «سوکت زدن» now routes to the physical RJ45 crimping knowledge (T568B steps), not Python sockets.
+- **Answer gates**: refusal/safety-lecture detection is ZWNJ- and curly-apostrophe-insensitive; garbage outputs (CJK leaks) and short evasions («نمیتوانید») are rejected and retried on fresh models — a refusal can never surface as the answer.

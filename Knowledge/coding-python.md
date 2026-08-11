@@ -48,6 +48,7 @@ import subprocess
 r = subprocess.run(["dir"], shell=True, capture_output=True, text=True)
 print(r.stdout, r.stderr)
 ```
+- سوکت (socket) نویسی: سوکت یعنی برنامه‌نویسی شبکه — `socket.socket(AF_INET, SOCK_STREAM)` برای TCP، `connect` به سرور، `send/recv` برای ارسال/دریافت، `bind/listen/accept` برای سرور، `socket.connect_ex()` برای بررسی باز بودن پورت.
 - مثال socket (بررسی پورت باز):
 ```python
 import socket

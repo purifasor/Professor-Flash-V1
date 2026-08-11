@@ -11,6 +11,8 @@
 
 <div class="app">
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
   <!-- ============ sidebar: history ============ -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-head">
@@ -31,6 +33,9 @@
   <!-- ============ main: chat ============ -->
   <main class="main">
     <header class="topbar">
+      <button class="btn btn-ghost burger" id="btnBurger" title="باز و بسته کردن هیستوری" aria-label="منو">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
       <div class="brand">
         <div class="logo"><img src="/img/logo-128.png" alt="Professor Flash"></div>
         <div>
@@ -40,7 +45,6 @@
       </div>
       <nav class="nav-tabs">
         <a class="nav-tab active" href="/">چت</a>
-        <a class="nav-tab" href="/agent">Agent</a>
       </nav>
       <div class="topbar-info">
         <div class="chip" id="learnedChip" title="دانش ذخیره‌شده در پوشه Learned">یادگیری: ۰</div>
@@ -55,7 +59,7 @@
       <div class="hero" id="hero">
         <div class="hero-logo"><img src="/img/logo-256.png" alt="Professor Flash"></div>
         <h1 class="hero-title">Professor Flash V1</h1>
-        <p class="hero-sub">چت: هر پیامی را می‌فهمد، فکر می‌کند و پاسخ واقعی می‌سازد - بدون ساخت فایل. برای ساخت برنامه به تب Agent برو.</p>
+        <p class="hero-sub">هر پیامی را می‌فهمد، فکر می‌کند و پاسخ واقعی می‌سازد - بدون ساخت فایل.</p>
         <div class="chips" id="chips"></div>
       </div>
     </div>
@@ -90,9 +94,6 @@
       </div>
       <div class="composer">
         <textarea id="input" rows="1" placeholder="بنویس: سوال، درخواست کد، یا محاسبه... (Shift+Enter برای خط جدید)" dir="auto"></textarea>
-        <button class="btn search" id="btnSearch" title="جستجو در وب">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="M20 20l-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
         <button class="btn send" id="btnSend" title="ارسال">
           <svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-7-8-3z" fill="currentColor"/></svg>
         </button>

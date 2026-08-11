@@ -134,6 +134,9 @@ function mdToHtml(text) {
     if (m) { if (listType !== "ul") { closeList(); html += "<ul>"; listType = "ul"; } html += `<li>${inlineMd(m[1])}</li>`; continue; }
     m = line.match(/^\s*\d+[.)]\s+(.*)$/);
     if (m) { if (listType !== "ol") { closeList(); html += "<ol>"; listType = "ol"; } html += `<li>${inlineMd(m[1])}</li>`; continue; }
+    // a line that is ONLY bold text (model-style pseudo-heading) becomes a heading
+    m = line.match(/^\*\*\s*([^*]+?)\s*\*\*$/);
+    if (m) { closeList(); html += `<h4>${inlineMd(m[1])}</h4>`; continue; }
     closeList();
     html += `<p>${inlineMd(line)}</p>`;
   }
@@ -186,6 +189,21 @@ async function copyText(txt) {
     document.execCommand("copy");
     ta.remove();
   }
+}
+
+/* toast notification (always visible, top-center, auto-fade) */
+let toastTimer = null;
+function showToast(text, ok) {
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "toast";
+    document.body.appendChild(t);
+  }
+  t.textContent = text;
+  t.className = "toast show" + (ok === false ? " err" : "");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = "toast"; }, 1600);
 }
 
 function timeAgo(ts) {
@@ -586,16 +604,27 @@ inputEl.addEventListener("keydown", (e) => {
   }
 });
 $("btnSend").addEventListener("click", () => send(inputEl.value));
-$("btnSearch").addEventListener("click", () => {
-  const v = inputEl.value.trim();
-  if (!v) {
-    addNote("برای جستجو، چیزی بنویس و روی این دکمه بزن - یا بنویس: سرچ کن درباره...");
-    inputEl.focus();
-    return;
+
+/* ---------------------------------------------------- sidebar toggle (hamburger) */
+const sidebarEl = $("sidebar");
+function toggleSidebar() {
+  const app = document.querySelector(".app");
+  if (!app) return;
+  if (window.innerWidth <= 760) {
+    app.classList.toggle("sidebar-open");
+  } else {
+    app.classList.toggle("sidebar-hidden");
   }
-  inputEl.value = "";
-  autoGrow();
-  send("سرچ کن " + v);
+}
+const burger = $("btnBurger");
+if (burger) burger.addEventListener("click", toggleSidebar);
+const backdrop = $("sidebarBackdrop");
+if (backdrop) backdrop.addEventListener("click", () => document.querySelector(".app")?.classList.remove("sidebar-open"));
+window.addEventListener("resize", () => {
+  const app = document.querySelector(".app");
+  if (!app) return;
+  if (window.innerWidth > 760) app.classList.remove("sidebar-open");
+  if (window.innerWidth <= 760) app.classList.remove("sidebar-hidden");
 });
 
 /* ------------------------------------------------------------ controls */
@@ -615,7 +644,7 @@ chatEl.addEventListener("click", async (e) => {
     const btn = e.target.closest(".code-copy");
     const body = document.querySelector(`pre[data-code-body="${btn.dataset.code}"]`);
     if (body) await copyText(body.textContent);
-    addNote("کد کپی شد.");
+    showToast("کد کپی شد ✅");
     return;
   }
 
@@ -624,7 +653,7 @@ chatEl.addEventListener("click", async (e) => {
   if (e.target.closest(".act-copy")) {
     const text = wrap.dataset.raw || "";
     await copyText(text);
-    addNote("پیام کپی شد.");
+    showToast("پیام کپی شد ✅");
     return;
   }
 });
