@@ -12,6 +12,96 @@ const state = {
   agent: null, // {path, name}
 };
 
+/* ------------------------------------------------- client identity + local history
+   Every browser (client) gets its own stable id (cookie `pf_client`), and ALL
+   chat history lives in that browser's localStorage keyed by the client id -
+   so each user's chats are private and never mix with other users' chats.
+   The server never stores conversations: it only receives the recent context
+   with each request and forgets it. */
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function setCookie(name, value, days) {
+  const d = new Date();
+  d.setTime(d.getTime() + days * 864e5);
+  document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; expires=" + d.toUTCString() + "; SameSite=Lax";
+}
+
+function clientId() {
+  let id = getCookie("pf_client") || localStorage.getItem("pf_client");
+  if (!id) {
+    id = "c" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    setCookie("pf_client", id, 365);
+    try { localStorage.setItem("pf_client", id); } catch (e) { /* private mode */ }
+  }
+  return id;
+}
+
+const LS_KEY = () => "pf_sessions_" + clientId();
+
+function lsLoad() {
+  try {
+    return JSON.parse(localStorage.getItem(LS_KEY()) || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function lsSave(d) {
+  try { localStorage.setItem(LS_KEY(), JSON.stringify(d)); } catch (e) { /* full */ }
+}
+
+function newSessionObj(mode) {
+  return {
+    id: "s" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+    title: "گفتگوی جدید",
+    messages: [],
+    updated: Math.floor(Date.now() / 1000),
+    mode: mode || "chat",
+  };
+}
+
+function lsEnsureActive(mode) {
+  const d = lsLoad();
+  const ok = d.active && (d.sessions || []).some((s) => s.id === d.active);
+  if (!ok) {
+    const s = newSessionObj(mode);
+    d.sessions = d.sessions || [];
+    d.sessions.push(s);
+    d.active = s.id;
+    lsSave(d);
+  }
+  return lsLoad();
+}
+
+function lsFind(sid) {
+  return (lsLoad().sessions || []).find((s) => s.id === sid) || null;
+}
+
+function lsAppend(sid, role, text) {
+  const d = lsLoad();
+  const s = (d.sessions || []).find((x) => x.id === sid);
+  if (!s) return;
+  s.messages = s.messages || [];
+  s.messages.push({ role: role, text: String(text), id: "m" + Math.random().toString(36).slice(2, 10), time: Math.floor(Date.now() / 1000) });
+  if (role === "user" && s.title === "گفتگوی جدید") {
+    s.title = String(text).trim().replace(/\s+/g, " ").slice(0, 40) || s.title;
+  }
+  s.updated = Math.floor(Date.now() / 1000);
+  lsSave(d);
+}
+
+function lsContext(sid, n) {
+  const s = lsFind(sid);
+  if (!s) return [];
+  return (s.messages || [])
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .slice(-(n || 8))
+    .map((m) => ({ role: m.role, text: m.text }));
+}
+
 /* ------------------------------------------------------------ helpers */
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -287,7 +377,10 @@ async function pollTask(tid) {
       if (t.reply) addMessage("assistant", t.reply, null);
       return;
     }
-    if (t.reply) addMessage("assistant", t.reply, null);
+    if (t.reply) {
+      addMessage("assistant", t.reply, null);
+      lsAppend(state.sessionId, "assistant", t.reply);
+    }
     loadModel(); // refresh brain badge + learned count
     refreshSessions(); // refresh sidebar counts (keeps the chat DOM intact)
   } catch (e) {
@@ -324,12 +417,16 @@ async function send(text) {
   cmdRendered = 0;
 
   addMessage("user", text, null);
+  lsAppend(state.sessionId, "user", text);
   heroEl.classList.remove("show");
   thinkingBubble();
   clearTodoLive();
   setTaskStatus("running");
 
-  const body = { message: text, sessionId: state.sessionId, mode: PAGE };
+  // the server never stores chats: it gets this client's recent context with
+  // each request and forgets it - history stays private on this machine
+  const body = { message: text, sessionId: state.sessionId, clientId: clientId(),
+                 history: lsContext(state.sessionId, 8), mode: PAGE };
   if (PAGE === "agent") body.project = { path: state.agent.path, name: state.agent.name };
 
   try {
@@ -439,32 +536,27 @@ chatEl.addEventListener("click", async (e) => {
   }
 });
 
-/* ------------------------------------------------------------ sessions */
+/* ------------------------------------------------------------ sessions
+   All session data is read/written from this browser's localStorage (keyed
+   by the pf_client cookie) - the server stays stateless, so chats of
+   different clients are fully isolated and private. */
 async function loadSessions() {
-  try {
-    await refreshSessions();
-    if (state.sessionId) await loadMessages(state.sessionId);
-  } catch (e) { /* offline */ }
+  await refreshSessions();
+  if (state.sessionId) await loadMessages(state.sessionId);
 }
 
 /* refresh only the sidebar list - never touches the chat DOM, so the live
    todo checklist survives task completion */
 async function refreshSessions() {
-  let r = await fetch("/api/history");
-  let d = await r.json();
-  if (!d.active) {
-    await fetch("/api/session/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: PAGE }) });
-    r = await fetch("/api/history");
-    d = await r.json();
-  }
+  const d = lsEnsureActive(PAGE);
   state.sessionId = d.active;
   sessionsEl.innerHTML = "";
   (d.sessions || []).forEach((s) => {
     const el = document.createElement("div");
-    el.className = "session" + (s.active ? " active" : "");
+    el.className = "session" + (s.id === d.active ? " active" : "");
     el.innerHTML = `
       <div class="session-title">${esc(s.title)}</div>
-      <div class="session-meta">${s.count} پیام · ${timeAgo(s.updated)}</div>
+      <div class="session-meta">${(s.messages || []).length} پیام · ${timeAgo(s.updated)}</div>
       <button class="session-del" title="حذف گفتگو">${icon("trash")}</button>`;
     el.addEventListener("click", (ev) => {
       if (ev.target.closest(".session-del")) {
@@ -479,22 +571,36 @@ async function refreshSessions() {
 
 async function switchSession(sid) {
   if (state.busy) return;
-  await fetch("/api/session/" + sid + "/activate", { method: "POST" });
-  await loadSessions();
+  const d = lsLoad();
+  d.active = sid;
+  lsSave(d);
+  state.sessionId = sid;
+  await loadMessages(sid);
+  refreshSessions();
 }
 
 async function deleteSession(sid, el) {
   if (state.busy) return;
-  await fetch("/api/history/" + sid + "/delete", { method: "POST" });
-  await loadSessions();
+  const d = lsLoad();
+  d.sessions = (d.sessions || []).filter((s) => s.id !== sid);
+  if (d.active === sid) d.active = d.sessions.length ? d.sessions[d.sessions.length - 1].id : null;
+  lsSave(d);
+  const nd = lsEnsureActive(PAGE);
+  state.sessionId = nd.active;
+  await loadMessages(state.sessionId);
+  refreshSessions();
 }
 
 $("btnNewSession").addEventListener("click", async () => {
   if (state.busy && !state.taskId) return;
   stopPolling();
-  const r = await fetch("/api/session/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: PAGE }) });
-  const d = await r.json();
-  state.sessionId = d.sessionId;
+  const d = lsLoad();
+  const s = newSessionObj(PAGE);
+  d.sessions = d.sessions || [];
+  d.sessions.push(s);
+  d.active = s.id;
+  lsSave(d);
+  state.sessionId = s.id;
   state.todoShown = false;
   chatEl.innerHTML = "";
   heroEl.classList.add("show");
@@ -505,17 +611,16 @@ $("btnNewSession").addEventListener("click", async () => {
 });
 
 async function loadMessages(sid) {
-  try {
-    const r = await fetch("/api/history/" + sid);
-    const s = await r.json();
-    chatEl.innerHTML = "";
-    (s.messages || []).forEach((m) => {
-      if (m.kind === "note") { addNote(m.text); return; }
-      addMessage(m.role, m.text, m.id, false);
-    });
-    heroEl.classList.toggle("show", !(s.messages || []).length);
-    scrollDown();
-  } catch (e) { /* offline */ }
+  const d = lsLoad();
+  const s = (d.sessions || []).find((x) => x.id === sid);
+  const msgs = s ? s.messages || [] : [];
+  chatEl.innerHTML = "";
+  msgs.forEach((m) => {
+    if (m.kind === "note") { addNote(m.text); return; }
+    addMessage(m.role, m.text, m.id, false);
+  });
+  heroEl.classList.toggle("show", !msgs.length);
+  scrollDown();
 }
 
 /* -------------------------------------------------------------- chips */
@@ -634,12 +739,14 @@ function showWorkspace() {
     });
     await loadAgentConfig();
   } else {
-    // always open a fresh session (new tab) when the chat page loads
-    try {
-      const r = await fetch("/api/session/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: PAGE }) });
-      const d = await r.json();
-      state.sessionId = d.sessionId;
-    } catch (e) { /* offline */ }
+    // each page load opens a fresh session; older ones stay in localStorage
+    const d = lsLoad();
+    const s = newSessionObj(PAGE);
+    d.sessions = d.sessions || [];
+    d.sessions.push(s);
+    d.active = s.id;
+    lsSave(d);
+    state.sessionId = s.id;
   }
   await loadSessions();
 })();

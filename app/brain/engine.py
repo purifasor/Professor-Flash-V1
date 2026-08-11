@@ -123,7 +123,8 @@ class TaskStopped(Exception):
 
 
 class Brain:
-    def __init__(self, memory, projects_root, emit=None, llm=None, mode="chat", agent=None):
+    def __init__(self, memory, projects_root, emit=None, llm=None, mode="chat", agent=None,
+                 client_history=None):
         self.memory = memory
         self.projects_root = projects_root
         self.emit = emit or (lambda *a, **k: None)
@@ -161,7 +162,18 @@ class Brain:
     def _conversation_context(self, n=6):
         """Recent user/assistant turns of the active chat - temporary in-chat
         memory so follow-ups understand what was said before (it stops when
-        the tab/session closes; nothing keeps running in the background)."""
+        the tab/session closes; nothing keeps running in the background).
+
+        When the frontend stores history on the client (per-client cookie) it
+        sends the recent turns with each request - those are used first so the
+        server never persists or mixes different users' conversations."""
+        if getattr(self, "client_history", None):
+            msgs = [m for m in self.client_history if m.get("role") in ("user", "assistant")][-n:]
+            if msgs:
+                return "\n".join(
+                    ("کاربر" if m["role"] == "user" else "پروفسور") + ": " + str(m["text"])[:300]
+                    for m in msgs
+                )
         try:
             sid = self.memory.data.get("active_session") or ""
             s = self.memory.get_session(sid)

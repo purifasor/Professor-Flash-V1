@@ -23,7 +23,7 @@
     {
       "provider": "OVH",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
-      "models": ["Meta-Llama-3_3-70B-Instruct", "Qwen3-32B", "gpt-oss-20b", "Qwen3.5-9B"],
+      "models": ["Meta-Llama-3_3-70B-Instruct", "Qwen3-32B", "Qwen3-Coder-30B-A3B-Instruct", "Mistral-Small-3.2-24B-Instruct-2506", "gpt-oss-20b", "Qwen3.5-9B"],
       "free": true,
       "key": null,
       "rate": "~2 rpm"

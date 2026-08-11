@@ -77,7 +77,7 @@ def _start_task(task):
 
 def _run_task(task):
     brain = Brain(memory, PROJECTS_DIR, emit=task.emit, llm=llm,
-                  mode=task.mode, agent=task.agent)
+                  mode=task.mode, agent=task.agent, client_history=task.history)
     try:
         result = brain.think(task.message)
         task.reply = result.get("reply")
@@ -94,8 +94,10 @@ def _run_task(task):
         task.error = str(exc)
         task.reply = "خطایی در پردازش پیش آمد: " + str(exc)
     finally:
-        # persist the assistant message in the conversation (only once)
-        if task.sid and task.reply and not task.assistant_saved:
+        # persist the assistant message in the conversation (only once) - but
+        # only when the client did NOT send its own history (client-side chats
+        # stay private in the browser and are never stored by the server)
+        if not task.history and task.sid and task.reply and not task.assistant_saved:
             memory.add_message(task.sid, "assistant", task.reply)
             task.assistant_saved = True
         # run the next queued message, if any
@@ -147,12 +149,13 @@ def _process_queue():
 
 
 class Task:
-    def __init__(self, tid, message, sid, mode="chat", agent=None):
+    def __init__(self, tid, message, sid, mode="chat", agent=None, history=None):
         self.id = tid
         self.message = message
         self.sid = sid
         self.mode = mode          # "chat" = text-only page, "agent" = full file builds
         self.agent = agent        # agent settings {path, name}
+        self.history = history or []  # recent turns sent by the client (private per-user)
         self.status = "running"  # running | queued | paused | done | stopped | error
         self.todos = []
         self.logs = []
@@ -277,8 +280,13 @@ def api_chat():
     sid = data.get("sessionId") or memory.data.get("active_session")
     mode = data.get("mode") or "chat"
     agent = data.get("project") or None
+    # The new frontend keeps chat history in the browser (per-client cookie)
+    # and sends the recent turns with every request, so the server never
+    # stores or mixes different clients' conversations.
+    client_history = data.get("history") or []
 
-    memory.add_message(sid, "user", message)
+    if not client_history:
+        memory.add_message(sid, "user", message)
 
     with TASKS_LOCK:
         current = TASKS.get(CURRENT_TASK["id"])
@@ -301,7 +309,7 @@ def api_chat():
         # a task is running -> queue this message (never mix it into the build)
         if current and current.status in ("running", "paused"):
             tid = uuid.uuid4().hex[:10]
-            task = Task(tid, message, sid, mode=mode, agent=agent)
+            task = Task(tid, message, sid, mode=mode, agent=agent, history=client_history)
             task.status = "queued"
             TASKS[tid] = task
             QUEUE.append(task)
@@ -310,7 +318,7 @@ def api_chat():
 
         # start a fresh task
         tid = uuid.uuid4().hex[:10]
-        task = Task(tid, message, sid, mode=mode, agent=agent)
+        task = Task(tid, message, sid, mode=mode, agent=agent, history=client_history)
         TASKS[tid] = task
         CURRENT_TASK["id"] = tid
         _start_task(task)
