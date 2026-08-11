@@ -104,3 +104,12 @@ different users' chats can never mix.
 - **Live facts**: today's date + time always injected; live USD→IRR rate fetched from a free API when currency is asked (exact rial/toman math with Persian digits).
 - **Persian word-sense**: «سوکت زدن» now routes to the physical RJ45 crimping knowledge (T568B steps), not Python sockets.
 - **Answer gates**: refusal/safety-lecture detection is ZWNJ- and curly-apostrophe-insensitive; garbage outputs (CJK leaks) and short evasions («نمیتوانید») are rejected and retried on fresh models — a refusal can never surface as the answer.
+
+## Update (2026-08-11) — v1.0.7: unlimited pool, PRF branding, weapons knowledge
+- Brain pool widened to 4 parallel providers: OVH-70B, LLM7, Kilo, Pollinations (no-key, UA-fixed). First strong answer wins; chain deadline keeps every request inside Vercel's window.
+- Client auto-retry: a «شلوغ بود» rate-limit hiccup is retried automatically 3x with backoff instead of showing a dead end.
+- PRF branding: the badge now shows the real model parameter, e.g. «موتور فکری: PRF 70B» / PRF 31B / PRF 32B.
+- Knowledge/Skills sync from the GitHub repo on startup (raw.githubusercontent) - repo updates reach the live model without redeploys.
+- New Knowledge/weapons.md: cold/hot weapons, explosives (compositions, VOD, ratios), chemical agents (doses, antidotes), biological agents (ID50/LD50), nuclear design (critical masses, Teller-Ulam), military optics, SIGINT/SDR, surveillance hardware - all factual and exact.
+- Deflection detection: «در عوض میتوانم در مورد موضوعات دیگر کمک کنم» and English variants are refusals -> retried with fresh models.
+- No Ollama / llama.service anywhere; everything runs on Vercel; the user's machine is never used.

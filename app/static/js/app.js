@@ -482,6 +482,18 @@ async function pollTask(tid) {
       return;
     }
     if (t.reply) {
+      // «شلوغ بود» is a rate-limit hiccup, not an answer: retry the SAME
+      // message automatically (up to 3 times) so the user never sees a dead end.
+      const busy = /شلوغ/.test(t.reply) && t.reply.length < 200 && !/```/.test(t.reply);
+      if (busy && (state.autoRetries || 0) < 3) {
+        state.autoRetries = (state.autoRetries || 0) + 1;
+        stopPolling();
+        const txt = state.pendingText;
+        addNote("سرویس‌های رایگان شلوغ بودند؛ تلاش مجدد خودکار (" + state.autoRetries + "/3)...");
+        setTimeout(() => { state.busy = false; send(txt, true); }, 3500 * state.autoRetries);
+        return;
+      }
+      state.autoRetries = 0;
       addMessage("assistant", t.reply, null);
       lsAppend(state.sessionId, "assistant", t.reply);
     }
@@ -509,7 +521,7 @@ function stopPolling() {
 }
 
 /* --------------------------------------------------------------- send */
-async function send(text) {
+async function send(text, silentRetry) {
   text = (text || "").trim();
   if (!text || state.busy) return;
   if (PAGE === "agent" && (!state.agent || !state.agent.path)) {
@@ -517,13 +529,16 @@ async function send(text) {
     return;
   }
   state.busy = true;
+  state.pendingText = text;
   state.todoShown = false;
   thinkTick = 0;
   cmdRendered = 0;
 
-  addMessage("user", text, null);
-  lsAppend(state.sessionId, "user", text);
-  heroEl.classList.remove("show");
+  if (!silentRetry) {
+    addMessage("user", text, null);
+    lsAppend(state.sessionId, "user", text);
+    heroEl.classList.remove("show");
+  }
   thinkingBubble();
   clearTodoLive();
   setTaskStatus("running");

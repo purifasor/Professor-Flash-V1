@@ -114,6 +114,54 @@ def _load_skills():
 
 _load_skills()
 
+# --------------------------------------------------- GitHub knowledge sync
+# Knowledge banks live in the GitHub repo. On startup the brain refreshes them
+# from GitHub raw (with the bundled copies as instant fallback), so updating
+# the repo updates the model's knowledge without a redeploy. Fully non-blocking.
+_GITHUB_API = "https://api.github.com/repos/purifasor/Professor-Flash-V1/contents/{f}?ref=main"
+_GITHUB_RAW = "https://raw.githubusercontent.com/purifasor/Professor-Flash-V1/main/{f}/{n}"
+
+
+def _sync_from_github():
+    def fetch(url):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=_UA), timeout=12) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception:
+            return None
+    try:
+        for folder, store in (("Knowledge", "kb"), ("Skills", "skills")):
+            listing = fetch(_GITHUB_API.format(f=folder))
+            if not listing:
+                continue
+            data = json.loads(listing)
+            names = [it["name"] for it in data
+                     if it.get("name", "").endswith(".md")
+                     and it["name"].lower() != "readme.md"]
+            if not names:
+                continue
+            bodies = []
+            for n in sorted(names):
+                raw = fetch(_GITHUB_RAW.format(f=folder, n=n))
+                if raw:
+                    bodies.append((n, raw))
+            if not bodies:
+                continue
+            if store == "kb":
+                global KB_SECTIONS
+                KB_SECTIONS = bodies
+            else:
+                global SKILLS_TEXT
+                SKILLS_TEXT = "\n\n".join(b for _, b in bodies)
+    except Exception:
+        pass
+
+
+try:
+    threading.Thread(target=_sync_from_github, daemon=True).start()
+except Exception:
+    pass
+
 _KB_STOP = {"این", "که", "برای", "یک", "با", "روی", "از", "به", "را", "و", "یا", "ما",
             "تو", "من", "میخوام", "می‌خواهم", "باید", "بود", "هست", "شود", "کن",
             "بگو", "یه", "باید", "چی", "چیه", "کرد", "میكنم", "بتونه", "نمی"}
@@ -375,10 +423,13 @@ def _save_config(c):
 
 
 # -------------------------------------------------------------- HTTP
+_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+
 def _post_json(url, payload, headers=None, timeout=8):
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", **(headers or {})},
+        headers={"Content-Type": "application/json", **_UA, **(headers or {})},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -389,7 +440,7 @@ def _post_json(url, payload, headers=None, timeout=8):
 
 def _get(url, timeout=8):
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=_UA), timeout=timeout) as r:
             return r.read().decode("utf-8", "replace")
     except Exception:
         return None
@@ -487,14 +538,14 @@ def _dechain(txt):
     return t
 
 
-def _pollinations(messages, timeout=8):
+def _pollinations(messages, timeout=8, max_tokens=1200, skip=None):
     body = {"messages": messages, "temperature": 0.7}
     candidates = [
         (POLL_URL + "openai", {"model": "openai", "messages": messages, "temperature": 0.7}),
         (POLL_URL, body),
         (POLL_URL + "openai", {"model": "gpt-4o-mini", "messages": messages}),
     ]
-    per = min(timeout, 4)
+    per = min(timeout, 8)
     for url, b in candidates:
         raw = _post_json(url, b, timeout=per)
         if not raw:
@@ -644,7 +695,8 @@ def _parallel_sweep(messages, timeout, max_tokens, skip):
             pass
 
     threads = [threading.Thread(target=run, args=(p, lbl), daemon=True)
-               for p, lbl in ((_ovh, "OVH"), (_llm7, "LLM7"), (_kilo, "Kilo"))]
+               for p, lbl in ((_ovh, "OVH"), (_llm7, "LLM7"), (_kilo, "Kilo"),
+                              (_pollinations, "Pollinations"))]
     for t in threads:
         t.start()
     done.wait(timeout)
@@ -935,6 +987,9 @@ SAFETY_RE = re.compile(
     r"content (moderation|filter|policy)|blocked (by|due to) (our )?(safety|policy)|"
     r"this (content|request) (violates|is against)|moderation (system|flag|block)|"
     r"cannot (fulfill|satisfy) this (request|prompt)|i (will|would) (not|n't) (be able to|help) (with|you)|"
+    r"در عوض،؟ می‌توانم|در عوض می توانم|به جای آن می‌توانم|به جای ان میتونم|در مورد موضوعات (دیگر|دیگری) (کمک|صحبت)|موضوع (دیگری|دیگر) را انتخاب|بهتر است (موضوع|در مورد) (دیگری|دیگر)|"
+    r"می‌توانم در مورد (موضوع|چیز) (دیگری|دیگر)|می‌تونم در مورد (موضوع|چیز) (دیگری|دیگر)|بریم سراغ (موضوع|چیز) (دیگری|دیگر)|"
+    r"i (can|'d be happy to) help with (something|anything) else|is there anything else i can (help|assist)|instead,? (i can|let me|why don'?t we)|let's talk about something else|i can assist with other topics|"
     r"لطفا(ی)? (توجه|دقت) کنید|توجه: |نکته: "
     r"هرگونه (فکر|افکار|اندیشه|نیت) (خودکشی|انتحار)|نشانه(ای|‌هایی)? از (درد|رنج)(های)? عمیق|"
     r"با کسی صحبت (کن|کنید)|با (یک|یک نفر) (حرف|صحبت) بزن|کمک (بگیر|بگیرید)|از (کسی|متخصص) کمک|تقاضای کمک|"
@@ -1082,6 +1137,16 @@ def _is_short_evasion(reply, user_text):
     if "```" in t or "===FILE" in t:
         return False
     return True
+
+
+def _brand(prov):
+    """Human label: «موتور فکری PRF 70B» - the real parameter of the model
+    that actually answered, never the raw provider name."""
+    name = (prov or "").split(" (")[0]
+    m = re.search(r"(\d{2,3})b", name, re.I)
+    if m:
+        return "PRF " + m.group(1).upper() + "B"
+    return "PRF"
 
 
 def _prov_keys(prov):
@@ -1538,7 +1603,10 @@ def api_chat():
                      "رایگان). چند لحظه صبر کن و دوباره تلاش کن.")
             _log(logs, "هیچ موتور آنلاین پاسخ نداد", "error")
     os.environ["PF_LAST_PROVIDER"] = prov or ""
-    TASKS[tid] = {"status": "done", "reply": reply, "todos": [], "logs": logs}
+    if prov:
+        MODEL_INFO["activeProvider"] = _brand(prov)
+    TASKS[tid] = {"status": "done", "reply": reply, "todos": [], "logs": logs,
+                  "provider": _brand(prov) if prov else None}
     if not use_client_store and session is not None:
         _save_reply(session, reply, h)
     return _respond()
