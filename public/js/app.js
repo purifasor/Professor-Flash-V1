@@ -358,10 +358,6 @@ $("btnScrollDown").addEventListener("click", () => scrollDown(true));
    ring + the real counter (0-100) driven by the time the server actually
    spends answering. When the reply arrives it bursts and morphs away, so
    the user always knows exactly how far the thinking has progressed. */
-const waitEl = $("waitProgress");   // legacy bar kept only as a fallback
-const waitFill = $("waitFill");
-const waitLabel = $("waitLabel");
-const waitPhase = $("waitPhase");
 let waitTimer = null;
 
 function createWaitSquare() {
@@ -384,10 +380,6 @@ function createWaitSquare() {
 
 function setProgress(pct, phase) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
-  if (waitEl) waitEl.hidden = false;
-  if (waitFill) waitFill.style.width = p + "%";
-  if (waitLabel) waitLabel.textContent = p + "%";
-  if (waitPhase && phase) waitPhase.textContent = phase;
   const cnt = $("wsCount");
   if (cnt) cnt.textContent = p;
   const sq = $("waitSquare");
@@ -400,7 +392,6 @@ function setProgress(pct, phase) {
    real answer bubble rises in right behind it */
 function hideProgress(burst) {
   if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
-  if (waitEl) waitEl.hidden = true;
   const wrap = $("waitSquareMsg");
   if (wrap) {
     const sq = $("waitSquare");

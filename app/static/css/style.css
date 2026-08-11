@@ -436,32 +436,7 @@ body::before {
   max-width: 860px; margin: 0 auto 8px;
   display: flex; align-items: center; gap: 10px;
 }
-.wait-progress {
-  flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 10px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 12px; padding: 6px 12px;
-  transition: opacity .25s;
-}
-.wait-progress[hidden] { display: none; }
-.wait-track {
-  flex: 1; height: 6px; min-width: 0;
-  background: rgba(255, 255, 255, 0.07);
-  border-radius: 6px; overflow: hidden;
-}
-.wait-fill {
-  height: 100%; width: 0%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  box-shadow: 0 0 10px rgba(224, 36, 94, 0.6);
-  border-radius: 6px;
-  transition: width .35s ease;
-}
-.wait-label {
-  font-size: 11px; color: var(--muted); white-space: nowrap;
-  font-variant-numeric: tabular-nums; min-width: 34px; text-align: center;
-  direction: ltr;
-}
-.wait-phase { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 
 /* ------------------------------------------ wait square (0->100 morph)
    Appears IN the chat as the last message while the brain thinks: a crimson
@@ -470,12 +445,16 @@ body::before {
 .wait-msg { align-items: center; }
 .wait-square {
   position: relative;
-  width: 112px; height: 112px;
-  border-radius: 18px;
+  width: 126px; height: 126px;
+  border-radius: 20px;
   background: radial-gradient(120% 120% at 50% 0%, #1d0f17, #080508 72%);
   border: 1px solid rgba(224, 36, 94, 0.55);
   box-shadow: 0 0 26px rgba(224, 36, 94, 0.35), inset 0 0 30px rgba(224, 36, 94, 0.14);
-  display: grid; place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   transition: transform .6s cubic-bezier(.6, -.2, .75, .4), opacity .5s, box-shadow .6s;
   overflow: hidden;
 }
@@ -492,20 +471,26 @@ body::before {
 .ws-count {
   position: relative;
   font-family: var(--mono);
-  font-size: 32px; font-weight: 800;
+  font-size: 34px; font-weight: 800;
   color: #fff;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 14px rgba(224, 36, 94, 0.9);
   line-height: 1;
-  display: flex; align-items: baseline; gap: 2px;
+  display: flex; align-items: baseline; gap: 3px;
+  margin-top: 6px;
 }
 .ws-pct { font-size: 12px; color: var(--accent-2); font-family: var(--font); }
+/* clear gap between the counting number and the status text below it */
 .ws-phase {
-  position: absolute; bottom: 9px; left: 0; right: 0;
+  position: relative;
+  max-width: 112px;
   text-align: center;
   font-size: 10px; color: var(--muted);
+  line-height: 1.5;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  padding: 0 8px;
+  padding: 8px 10px 0;
+  border-top: 1px solid rgba(224, 36, 94, 0.28);
+  margin: 0 14px 4px;
 }
 .wait-square.burst {
   transform: scale(1.7);
@@ -803,7 +788,6 @@ body::before {
   .controls { flex-wrap: wrap; gap: 6px; }
   .controls .btn { padding: 7px 10px; font-size: 12px; }
   .composer-rail { padding: 0 2px 6px; }
-  .wait-progress { max-width: 100%; }
   /* on mobile the composer is full-width: lift the page switch above it */
   .page-switch { bottom: 86px; left: 10px; padding: 3px; border-radius: 10px; }
   .ps-item { padding: 6px 12px; font-size: 12px; }
