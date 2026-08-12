@@ -246,11 +246,11 @@ body::before {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   border-top-right-radius: 4px;
-  padding: 11px 14px;
+  padding: 14px 17px;
   position: relative;
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.85;
+  line-height: 1.9;
   font-size: 13.5px;
   /* mixed Persian/English text keeps its natural order */
   direction: rtl;
@@ -483,12 +483,12 @@ body::before {
 /* clear gap between the counting number and the status text below it */
 .ws-phase {
   position: relative;
-  max-width: 112px;
+  max-width: 120px;
   text-align: center;
-  font-size: 10px; color: var(--muted);
+  font-size: 10.5px; color: var(--muted);
   line-height: 1.5;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  padding: 8px 10px 0;
+  padding: 9px 10px 0;
   border-top: 1px solid rgba(224, 36, 94, 0.28);
   margin: 0 14px 4px;
 }
@@ -516,13 +516,25 @@ body::before {
   color: var(--text);
   font-weight: 800;
   line-height: 1.5;
-  margin: 18px 0 8px;
-  padding-bottom: 4px;
+  margin: 20px 0 10px;
+  padding-bottom: 6px;
   border-bottom: 1px dashed rgba(224, 36, 94, 0.22);
 }
 .bubble h3 { font-size: 14.5px; }
 .bubble h2 { font-size: 16px; }
-.bubble h1 { font-size: 17.5px; }
+/* h1 = the answer's main TITLE: gradient accent, clearly distinct from
+   every sub-title and from plain body text */
+.bubble h1 {
+  font-size: 20px;
+  background: linear-gradient(135deg, #ff6a4d, #e0245e);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  border-bottom: 1.5px solid rgba(224, 36, 94, 0.55);
+  padding-bottom: 8px;
+  letter-spacing: .2px;
+}
 .bubble h4 { font-size: 14px; margin: 16px 0 6px; border-bottom: none; }
 .bubble h3::before { content: "◆ "; color: var(--accent); font-size: 11px; }
 .bubble h4::before { content: "◈ "; color: var(--accent); font-size: 11px; }
@@ -536,7 +548,9 @@ body::before {
 .bubble li { margin: 7px 0; line-height: 1.95; }
 .bubble li::marker { color: var(--accent); font-weight: 700; }
 .bubble li > strong:first-child { color: #ffd9e4; }
-.bubble p { margin: 8px 0; }
+.bubble p { margin: 9px 0; }
+.bubble ul, .bubble ol { margin: 10px 0; }
+.bubble li { margin: 8px 0; }
 
 /* markdown tables inside assistant messages */
 .bubble .md-table {
