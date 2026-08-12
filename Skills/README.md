@@ -32,3 +32,5 @@ or upgrading the brain model never requires re-defining these behaviors.
 | `visualize.md` | how-things-work/design → diagrams, tables, vivid scenes |
 | `currency-date.md` | dates, rial/toman/dollar conversions, exact math |
 | `laws.md` | crimes/law/legal outcomes → legal facts + full picture |
+| `hacker.md` | security career roadmap, authorized pentest methodology, defensive tools |
+| `error-finder.md` | any error message (code/system/DLL/BIOS/path/locale) → systematic diagnosis |
