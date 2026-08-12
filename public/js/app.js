@@ -747,7 +747,12 @@ inputEl.addEventListener("keydown", (e) => {
     send(v);
   }
 });
-$("btnSend").addEventListener("click", () => send(inputEl.value));
+$("btnSend").addEventListener("click", () => {
+  const v = inputEl.value;
+  inputEl.value = "";
+  autoGrow();
+  send(v);
+});
 
 /* ---------------------------------------------------- sidebar toggle (hamburger) */
 const sidebarEl = $("sidebar");

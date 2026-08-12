@@ -1241,6 +1241,31 @@ SYSTEM_BUILD = SYSTEM_CORE + (
 
 
 # ------------------------------------------------------------ handlers
+_THINK_RE = re.compile(r"<think\b.*?</think>\s*", re.S | re.I)
+
+
+def _clean_reply(t):
+    """Strip chain-of-thought leaks. Many hosted models now return their
+    internal reasoning inside <think>...</think> tags in the CONTENT field
+    (not the reasoning field). That thinking is useless noise for the user and
+    can also trip the refusal gates - remove it and keep only the real answer."""
+    if not t:
+        return t
+    s = str(t)
+    if not re.search(r"<\s*think\b", s, re.I):
+        return s
+    s = _THINK_RE.sub("", s)
+    # whole reply was one thinking dump -> no usable answer left
+    s = s.strip()
+    if len(s) < 3:
+        return ""
+    # some models open with <think> but never close it: cut at the tag
+    i = re.search(r"<\s*think\b", s, re.I)
+    if i:
+        return s[: i.start()].strip()
+    return s
+
+
 def _handler_control(text):
     s = _norm(text)
     if any(w in s for w in ("توقف کامل", "توقف کن", "متوقف کن", "بس کن", "بسه", "لغو کن")):
@@ -1696,6 +1721,8 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None):
 
     full = [{"role": "system", "content": system}] + msgs
     out, prov = brain(full, timeout=min(timeout, remain()), max_tokens=max_tokens, skip=refused, cb=cb)
+    if out:
+        out = _clean_reply(out)
     if ok(out):
         if cb:
             cb(75, "پاسخ تأیید شد")
@@ -1713,6 +1740,8 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None):
         msgs2[-1] = {"role": "user", "content": msgs[-1]["content"] + b}
         out2, prov2 = brain([{"role": "system", "content": system}] + msgs2,
                             timeout=min(7, remain()), max_tokens=max_tokens, skip=refused, cb=cb)
+        if out2:
+            out2 = _clean_reply(out2)
         if ok(out2):
             return out2, prov2
         if out2:
@@ -1738,6 +1767,8 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None):
         msgs2[-1] = {"role": "user", "content": msgs[-1]["content"] + REFUSAL_BOOST4}
         out3, prov3 = brain([{"role": "system", "content": system}] + msgs2,
                             timeout=min(10, remain()), max_tokens=max_tokens, cb=cb)
+        if out3:
+            out3 = _clean_reply(out3)
         if ok(out3):
             return out3, prov3
         if out3:
@@ -2150,6 +2181,7 @@ def _dispatch_route(route, text, client_history, session, use_client_store, logs
             reply = ("موتور فکری آنلاین در این لحظه شلوغ بود (نرخ محدود سرویس‌های "
                      "رایگان). چند لحظه صبر کن و دوباره تلاش کن.")
             _log(logs, "هیچ موتور آنلاین پاسخ نداد", "error")
+    reply = _clean_reply(reply)
     if cb:
         cb(92, "در حال نهایی‌سازی...")
     return reply, prov, []
