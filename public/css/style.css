@@ -274,13 +274,16 @@ body::before {
   opacity: 0; transition: opacity .15s;
 }
 .msg:hover .msg-side { opacity: 1; }
-.msg-side .act-copy {
+.msg-side .act-copy, .msg-side .act-dl {
   background: rgba(255,255,255,.06); border: 1px solid var(--line);
   color: var(--muted); border-radius: 7px; cursor: pointer;
   width: 24px; height: 24px; display: grid; place-items: center; line-height: 0;
 }
-.msg-side .act-copy:hover { color: var(--text); background: rgba(255,255,255,.14); }
-.msg-side .act-copy svg { width: 13px; height: 13px; }
+.msg-side .act-copy:hover, .msg-side .act-dl:hover {
+  color: var(--text); background: rgba(255,255,255,.14);
+}
+.msg-side .act-dl:hover { color: var(--accent-2); border-color: rgba(255,94,58,.5); }
+.msg-side .act-copy svg, .msg-side .act-dl svg { width: 13px; height: 13px; }
 
 /* code blocks inside messages */
 .code-head {

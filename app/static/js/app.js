@@ -241,6 +241,7 @@ function timeAgo(ts) {
 function icon(name) {
   const icons = {
     copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>',
+    dl: '<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>',
     check: '<svg viewBox="0 0 24 24"><path d="M5 13l4 4 10-10" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
@@ -265,7 +266,7 @@ async function loadModel() {
     const badge = $("brainText");
     const dot = $("brainDot");
     if (m.activeProvider) {
-      badge.textContent = "موتور فکری: " + m.activeProvider;
+      badge.textContent = m.activeProvider;   // e.g. «PRF 397B» - no engine prefix
       dot.className = "dot ok";
     } else {
       badge.textContent = "حالت محلی (بدون موتور فکری)";
@@ -282,16 +283,41 @@ function avatarHtml(role) {
   return '<div class="avatar"><img src="/img/logo-128.png" alt="PF"></div>';
 }
 
+/* map a code fence language label to a real file extension for downloads */
+function extForLang(lang) {
+  const l = String(lang || "").toLowerCase().replace(/[^a-z0-9+#]/g, "");
+  if (l.includes("python") || l === "py" || l.includes("pyth") || l === "py" ) return "py";
+  if (l.includes("html") || l.includes("htm")) return "html";
+  if (l.includes("css")) return "css";
+  if (l.includes("javascript") || l === "js" || l.includes("node")) return "js";
+  if (l.includes("typescript") || l === "ts") return "ts";
+  if (l.includes("json")) return "json";
+  if (l.includes("java")) return "java";
+  if (l.includes("c++") || l.includes("cpp")) return "cpp";
+  if (l.includes("c#") || l.includes("csharp")) return "cs";
+  if (l.includes("php")) return "php";
+  if (l.includes("go")) return "go";
+  if (l.includes("rust")) return "rs";
+  if (l.includes("shell") || l.includes("bash") || l.includes("sh")) return "sh";
+  if (l.includes("sql")) return "sql";
+  return "txt";
+}
+
 function addMessage(role, text, mid, animate) {
   const wrap = document.createElement("div");
   wrap.className = "msg " + (role === "user" ? "user" : "bot");
   wrap.dataset.mid = mid || "";
-  // copy button on EVERY message - appears above it on hover
-  const actions = `<button class="act-copy" title="کپی پیام">${icon("copy")}</button>`;
+  const bodyHtml = renderContent(text);
+  // copy button on EVERY message; download button ONLY on bot answers that
+  // contain a code block (downloads just the code, with a real extension)
+  let actions = `<button class="act-copy" title="کپی پیام">${icon("copy")}</button>`;
+  if (role === "bot" && /<pre class="code-block"/.test(bodyHtml)) {
+    actions = `<button class="act-dl" title="دانلود کد">${icon("dl")}</button>` + actions;
+  }
   wrap.dataset.raw = String(text);
   wrap.innerHTML = `
     ${avatarHtml(role)}
-    <div class="bubble">${renderContent(text)}</div>
+    <div class="bubble">${bodyHtml}</div>
     <div class="msg-side">${actions}</div>`;
   chatEl.appendChild(wrap);
   if (animate !== false) scrollDown(role === "user");
@@ -848,6 +874,27 @@ chatEl.addEventListener("click", async (e) => {
     const body = document.querySelector(`pre[data-code-body="${btn.dataset.code}"]`);
     if (body) await copyText(body.textContent);
     showToast("کد کپی شد ✅");
+    return;
+  }
+
+  // download the CODE of a bot answer: only the fenced code, with a real
+  // extension (.html / .py / .js ...) - never the surrounding markdown
+  if (e.target.closest(".act-dl")) {
+    const body = wrap.querySelector(".code-block");
+    if (body) {
+      const langEl = wrap.querySelector(".code-label");
+      const ext = extForLang(langEl ? langEl.textContent : "");
+      const code = body.textContent;
+      const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "pf-code." + ext;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      a.remove();
+      showToast("کد دانلود شد ✅ (" + ext + ")");
+    }
     return;
   }
 

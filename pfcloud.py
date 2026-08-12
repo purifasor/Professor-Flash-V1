@@ -70,7 +70,7 @@ MODEL_INFO = {
     "offline": False,
     "type": "cloud-hybrid",
     "brain": "PRF",
-    "activeProvider": "PRF (ابر - رایگان)",
+    "activeProvider": "PRF",
     "learnedCount": 0,
     "projectsRoot": "workspace (ابر)",
 }
@@ -260,25 +260,36 @@ SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Skills")
 SKILLS_TEXT = ""
 
 
-def _load_skills():
-    global SKILLS_TEXT
-    if not os.path.isdir(SKILLS_DIR):
-        return
+def _load_md_dir(d, out):
+    """Load every .md in a folder (except README) into one text block."""
+    if not os.path.isdir(d):
+        return ""
     parts = []
     try:
-        for fn in sorted(os.listdir(SKILLS_DIR)):
+        for fn in sorted(os.listdir(d)):
             if not fn.endswith(".md") or fn.lower() == "readme.md":
                 continue
-            with open(os.path.join(SKILLS_DIR, fn), "r", encoding="utf-8") as f:
+            with open(os.path.join(d, fn), "r", encoding="utf-8") as f:
                 body = f.read().strip()
             if body:
                 parts.append(body)
     except Exception:
         pass
-    SKILLS_TEXT = "\n\n".join(parts)
+    return "\n\n".join(parts)
+
+
+def _load_skills():
+    global SKILLS_TEXT
+    SKILLS_TEXT = _load_md_dir(SKILLS_DIR, SKILLS_TEXT)
 
 
 _load_skills()
+
+# coder/ - coding capabilities (prompt system, Persian request sense, design
+# sense, 2D/3D spatial understanding, problem solving). Injected into the
+# code/builder system prompts so ANY hosted model codes with these skills.
+CODER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coder")
+CODER_TEXT = _load_md_dir(CODER_DIR, "")
 
 # --------------------------------------------------- GitHub knowledge sync
 # Knowledge banks live in the GitHub repo. On startup the brain refreshes them
@@ -1297,6 +1308,13 @@ SYSTEM_BUILD = SYSTEM_CORE + (
     "the user asked; Persian UI uses the Vazirmatn font; web pages are responsive, animated, "
     "SEO-friendly and accessible. After the files, write one short Persian summary line."
 )
+
+# coder/ capabilities (single-file rule, Persian request sense, design sense,
+# 2D/3D spatial understanding, problem solving) mount on every code request.
+_CODER = ("\n\nCODER CAPABILITIES (coding requests - read and apply):\n" + CODER_TEXT) if CODER_TEXT else ""
+if _CODER:
+    SYSTEM_SNIPPET += _CODER
+    SYSTEM_BUILD += _CODER
 
 # PRF dark engine (DARK requests only): the criminal mastermind. Mounted by
 # _handler_dark with the weapons/security knowledge banks and the dark boosts
