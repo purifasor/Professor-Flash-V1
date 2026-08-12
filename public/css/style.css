@@ -839,6 +839,10 @@ body::before {
   .msg .avatar { width: 28px; height: 28px; font-size: 12px; }
   .bubble h3 { font-size: 13.5px; }
   .scroll-down { bottom: 6px; }
+  /* code blocks stay readable and scrollable on small screens */
+  .code-block { font-size: 11.5px; padding: 10px 12px; }
+  .code-copy { width: 30px; height: 30px; justify-content: center; padding: 0; }
+  .msg-side .act-copy { width: 28px; height: 28px; }
 }
 
 /* cloud build delivery: zip download button */

@@ -1194,7 +1194,18 @@ SYSTEM_CORE = (
     "produce the complete answer, following the user's exact spec. 4) VERIFY - check the "
     "answer against the request: nothing asked is missing, nothing off-topic is added. "
     "5) DELIVER - format it cleanly (headings, lists, --- separators, one emoji per "
-    "section, an ASCII diagram whenever showing how something works)."
+    "section, an ASCII diagram whenever showing how something works).\n\n"
+    "PERSIAN ANSWER CONTRACT (apply to every answer):\n"
+    "- Structure: one main TITLE, then section sub-titles, then body text - the title "
+    "must be visually distinct from sub-titles and from plain text.\n"
+    "- Separate sections with --- rules and keep consistent spacing between paragraphs - "
+    "never cramped, never stretched.\n"
+    "- At most one relevant emoji per section heading; keep the rest of the text clean.\n"
+    "- Write numbers in Persian digits with thousand separators; correct Persian "
+    "punctuation (؟ ، ؛ «»); half-spaces (می‌شود); never mix Finglish or English words "
+    "into Persian prose unless they are common loanwords (اوکی، گیت‌هاب، سرچ).\n"
+    "- End with a short conclusion line («نتیجه: ...» or «🏆 بهترین: ...») so the user "
+    "walks away with the answer, not just the process."
 )
 
 SYSTEM_QUESTION = SYSTEM_CORE + (
