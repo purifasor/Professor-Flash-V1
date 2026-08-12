@@ -1,24 +1,16 @@
 {
   "model": "Professor Flash V1",
-  "brain": "PRF",
+  "brain": "PRF TRIAD",
   "unrestricted": true,
   "premium_env_keys": ["GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
   "anonymous": [
     {
       "provider": "OVH",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
-      "models": ["Qwen3.5-397B-A17B", "Meta-Llama-3_3-70B-Instruct", "gpt-oss-120b", "Qwen3-32B", "Qwen3.6-27B", "Qwen3-Coder-30B-A3B-Instruct", "Mistral-Small-3.2-24B-Instruct-2506", "gpt-oss-20b", "Qwen3.5-9B"],
+      "models": ["Qwen3.5-397B-A17B", "gpt-oss-120b", "Meta-Llama-3_3-70B-Instruct"],
       "free": true,
       "key": null,
       "rate": "~2 rpm shared"
-    },
-    {
-      "provider": "Kilo",
-      "url": "https://api.kilo.ai/api/gateway/chat/completions",
-      "models": ["openrouter/free", "kilo-auto/free"],
-      "free": true,
-      "key": null,
-      "rate": "~200 req/hr"
     }
   ]
 }

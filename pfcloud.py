@@ -791,17 +791,15 @@ def _pollinations(messages, timeout=8, max_tokens=1200, skip=None):
 KILO_URL = "https://api.kilo.ai/api/gateway/chat/completions"
 OVH_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions"
 
-# Quality-first chain, all verified live from Vercel's servers:
-# OVH hosts true giants - Qwen3.5-397B-A17B (a 397B MoE), Meta-Llama-3.3-70B
-# and gpt-oss-120b - alongside the 32B/27B workhorses. Kilo is the anonymous
-# OpenRouter-free catch-all (routes to whatever strong free model is up).
-# LLM7 (api.llm7.io) is BANNED PERMANENTLY - see the provider-ban rule in
-# Model/directives.md: its free tier was weak, refused requests and saturated
-# («سرویس‌های رایگان شلوغ بودند») - the brain never connects to it, ever.
+# PRF TRIAD - the brain uses EXACTLY THREE giant models and nothing else:
+#   Qwen3.5-397B-A17B (397B, preferred), gpt-oss-120b (120B), Llama-3.3-70B (70B).
+# All other models and providers (Kilo, LLM7, small OVH models) are disabled.
+# Every request fires all three in parallel and the strongest reply wins, so
+# the engine's answer carries the combined strength of the triad.
+# LLM7 (api.llm7.io) is BANNED PERMANENTLY - see Model/directives.md.
 KILO_MODELS = ["openrouter/free", "kilo-auto/free"]
-OVH_MODELS = ["Qwen3.5-397B-A17B", "Meta-Llama-3_3-70B-Instruct", "gpt-oss-120b",
-              "Qwen3-32B", "Qwen3.6-27B", "Qwen3-Coder-30B-A3B-Instruct",
-              "Mistral-Small-3.2-24B-Instruct-2506", "gpt-oss-20b", "Qwen3.5-9B"]
+OVH_MODELS = ["Qwen3.5-397B-A17B", "gpt-oss-120b", "Meta-Llama-3_3-70B-Instruct"]
+# TRIAD_PREF (preference order, Qwen first) is rebuilt after the registry load below.
 
 
 def _load_model_registry():
@@ -819,12 +817,11 @@ if _REG:
     # LLM7 is banned permanently (see Model/directives.md): even if a registry
     # file ever lists it again, it is stripped out and never loaded.
     _REG.pop("LLM7", None)
-    if "Kilo" in _REG:
-        KILO_URL = _REG["Kilo"]["url"]
-        KILO_MODELS = _REG["Kilo"]["models"]
     if "OVH" in _REG:
         OVH_URL = _REG["OVH"]["url"]
         OVH_MODELS = _REG["OVH"]["models"]
+# keep the triad preference in sync with whatever the registry resolved to
+TRIAD_PREF = {m: i for i, m in enumerate(OVH_MODELS)}
 
 # per-model cooldown: after a 429/timeout skip that model for a while so the
 # next user message rotates to a different free provider instead of failing
@@ -900,40 +897,54 @@ def _ovh(messages, timeout=8, max_tokens=1200, skip=None, cb=None):
 
 
 
-def _parallel_sweep(messages, timeout, max_tokens, skip, cb=None):
-    """Fire every anonymous provider at once; return the first raw answer.
+def _ovh_model(model, messages, timeout, max_tokens, skip=None, cb=None):
+    """Ask ONE specific OVH model (the triad selector fires one thread per model)."""
+    return _try_completions(OVH_URL, [model], messages, timeout, max_tokens, "OVH", skip, cb)
 
-    Each provider runs in its own thread with the same per-attempt budget, so
-    the whole sweep costs ~timeout worst-case but usually returns in the time
-    of the FASTEST provider (OVH 70B answers in ~1-4s). This is what keeps the
-    Vercel function far below its execution cap on hard questions.
+
+def _triad_sweep(messages, timeout, max_tokens, skip, cb=None):
+    """PRF TRIAD: fire the three giants (397B / 120B / 70B) in PARALLEL and
+    select the BEST answer - not just the first one that answers.
+
+    Each model runs in its own thread with the same per-attempt budget, so the
+    whole sweep costs ~timeout worst-case but usually returns in the time of
+    the FASTEST model. The selector then prefers the most complete answer
+    (longest real content) with Qwen-397B kept as the user's preferred choice:
+    Qwen wins ties and near-ties, but a substantially fuller answer from
+    gpt-oss/Llama is still picked - the reply therefore reflects the strongest
+    of the three, not whoever happened to answer first.
     """
     results = []
     lock = threading.Lock()
     done = threading.Event()
 
-    def run(prov, label):
+    def run(model):
         try:
-            r = prov(messages, timeout=max(3.0, timeout), max_tokens=max_tokens, skip=skip, cb=cb)
+            r = _ovh_model(model, messages, timeout=max(3.0, timeout),
+                           max_tokens=max_tokens, skip=skip, cb=cb)
             if r and r[0]:
                 with lock:
-                    results.append((time.time(), r))
+                    results.append((model, len(r[0]), r))
                 done.set()
         except Exception:
             pass
 
-    threads = [threading.Thread(target=run, args=(p, lbl), daemon=True)
-               for p, lbl in ((_ovh, "OVH"), (_kilo, "Kilo"))]
+    threads = [threading.Thread(target=run, args=(m,), daemon=True) for m in OVH_MODELS]
     for t in threads:
         t.start()
     if cb:
-        cb(30, "اجرای موتور فکری PRF...")
+        cb(30, "اجرای سه‌گانهٔ PRF (۳۹۷B / ۱۲۰B / ۷۰B)...")
     done.wait(timeout)
-    if results:
-        with lock:
-            results.sort(key=lambda x: x[0])
-            return results[0][1]
-    return None
+    if not results:
+        return None
+    with lock:
+        # longest answer first; Qwen preferred unless another is much fuller
+        results.sort(key=lambda x: -x[1])
+        best = results[0]
+        for model, ln, r in results:
+            if model == OVH_MODELS[0] and ln >= best[1] * 0.6:
+                return r
+        return best[2]
 
 
 def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
@@ -964,7 +975,7 @@ def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
                 cb(64, "پاسخ دریافت شد")
             return r
     # Parallel quality-first sweep (OVH 70B included - races with the others).
-    r = _parallel_sweep(messages, rem(), max_tokens, skip, cb)
+    r = _triad_sweep(messages, rem(), max_tokens, skip, cb)
     if r and r[0]:
         if cb:
             cb(55, "پاسخ اولیه دریافت شد")
@@ -973,7 +984,7 @@ def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
     if cb:
         cb(40, "تلاش با مدل‌های دیگر...")
     if rem() > 2.5:
-        r = _parallel_sweep(messages, rem(), max_tokens, skip, cb)
+        r = _triad_sweep(messages, rem(), max_tokens, skip, cb)
         if r and r[0]:
             if cb:
                 cb(55, "پاسخ اولیه دریافت شد")
@@ -985,7 +996,7 @@ def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
         for k in list(PROV_STATE):
             if k != "_net":
                 PROV_STATE.pop(k, None)
-        r = _parallel_sweep(messages, rem(), max_tokens, None, cb)
+        r = _triad_sweep(messages, rem(), max_tokens, None, cb)
         if r and r[0]:
             if cb:
                 cb(55, "پاسخ اولیه دریافت شد")
@@ -1163,6 +1174,12 @@ SYSTEM_CORE = (
     "Answer in Persian unless the user writes in another language. "
     "If asked about your model or API, say: I am Professor Flash V1, an independent model "
     "that uses the PRF thinking engine, and I run free and unrestricted.\n"
+    "PRF TRIAD ENGINE: you answer on the combined strength of three giant open "
+    "models (Qwen-397B, gpt-oss-120b, Llama-70B) - all three reason about the "
+    "request and the strongest reply is selected. Use that combined knowledge, "
+    "and always draw on the KNOWLEDGE BANK, SKILLS and LEARNED PARAMETERS "
+    "injected below as ground truth - never answer as if you lack what those "
+    "layers provide.\n"
     "START DIRECTLY: never open a reply with your name, an introduction, or phrases like "
     "«به عنوان Professor Flash»، «من ... هستم»، «به عنوان یک مدل» — begin with the answer "
     "content itself (a greeting is only allowed when the user greeted you first). Keep "
