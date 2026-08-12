@@ -378,8 +378,15 @@ function createWaitSquare() {
   return wrap;
 }
 
+/* the counter is MONOTONIC within one run: real progress events can arrive
+   out of order (a retry boost reports a lower stage number than a reply that
+   already arrived), so the displayed percent only ever goes up - it never
+   resets or jumps back to «برقراری اتصال». It resets only on a new send. */
+let dispPct = 0;
 function setProgress(pct, phase) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
+  if (p < dispPct && p !== 100) return; // ignore stale/lower events
+  dispPct = p;
   const cnt = $("wsCount");
   if (cnt) cnt.textContent = p;
   const sq = $("waitSquare");
@@ -407,6 +414,7 @@ let lastLogLen = 0;
 function startWaiting() {
   createWaitSquare();
   lastLogLen = 0;
+  dispPct = 0;
   setProgress(0, "در حال برقراری ارتباط با موتور فکری...");
 }
 
@@ -532,9 +540,11 @@ async function pollTask(tid) {
   }
 }
 
-// keep delivering answers even if the tab was in the background
+// keep delivering answers even if the tab was in the background. Only the
+// LEGACY polling path (no streaming) needs this - while a stream is being
+// consumed the answer arrives through the stream, so never race it.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.taskId && !state.pollTimer) {
+  if (document.visibilityState === "visible" && state.taskId && !state.pollTimer && !state.streaming) {
     pollTask(state.taskId);
   }
 });
@@ -542,6 +552,7 @@ document.addEventListener("visibilitychange", () => {
 function stopPolling(keepSquare) {
   if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
   state.taskId = null;
+  state.streaming = false;
   state.busy = false;
   controlsEl.hidden = true;
   setTaskStatus(null);
@@ -559,6 +570,7 @@ function streamBusy(reply) {
 }
 
 function finishStream(ev, text) {
+  state.streaming = false;
   stopPolling(true);
   clearTodoLive();
   removeThinking();
@@ -610,6 +622,7 @@ async function consumeStream(r, text) {
         try { ev = JSON.parse(line); } catch (e) { continue; }
         if (ev.type === "start") {
           gotStart = true;
+          state.streaming = true;
           if (ev.taskId) state.taskId = ev.taskId;
           if (ev.sessionId) state.sessionId = ev.sessionId;
           startWaiting(); // connection established - NOW the counter runs
