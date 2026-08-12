@@ -411,14 +411,95 @@ $("chatScroll").addEventListener("scroll", () => {
 });
 $("btnScrollDown").addEventListener("click", () => scrollDown(true));
 
-/* ----------------------------------------- live answer box (no % counter)
+/* -------------------------------------- live answer box + morph loader
    The answer box is created the moment a message is sent and stays in the
    chat. While the brain works it shows a REAL status line (driven by actual
-   server progress events - never a fake timer), then the complete answer is
-   revealed word-by-word / line-by-line into the SAME box and finished with
-   copy + download actions. No percentage square, no locked counter - the
-   user always watches the reply materialize, and it is never half-written. */
-let live = null; // { wrap, bubble, status, buf }
+   server progress events - never a fake timer) under a morphing loader:
+   square → triangle → circle, with liquid filling the shape. When the answer
+   arrives the loader fades and the complete reply types itself into the SAME
+   box, finished with copy + download actions. No % counter, no locked square. */
+let live = null; // { wrap, bubble, status, buf, raf }
+
+/* ---- morphing loader: square → triangle → circle, each 26 numbers ---- */
+const MORPH_KEYS = [
+  [30,30, 50,30, 70,30, 90,30, 90,50, 90,70, 90,90, 70,90, 50,90, 30,90, 30,70, 30,50, 30,30],          // square
+  [60,18, 78,44, 96,66, 98,84, 94,98, 32,98, 26,86, 22,72, 36,42, 52,26, 56,21, 58,19, 60,18],          // triangle
+  [60,16, 84.3,16, 104,35.7, 104,60, 104,84.3, 84.3,104, 60,104, 35.7,104, 16,84.3, 16,60, 16,35.7, 35.7,16, 60,16], // circle
+];
+
+function pathFromPts(n) {
+  return `M${n[0]},${n[1]} C${n[2]},${n[3]} ${n[4]},${n[5]} ${n[6]},${n[7]} `
+       + `C${n[8]},${n[9]} ${n[10]},${n[11]} ${n[12]},${n[13]} `
+       + `C${n[14]},${n[15]} ${n[16]},${n[17]} ${n[18]},${n[19]} `
+       + `C${n[20]},${n[21]} ${n[22]},${n[23]} ${n[24]},${n[25]} Z`;
+}
+
+function lerpPts(a, b, t) {
+  return a.map((v, i) => Math.round((v + (b[i] - v) * t) * 10) / 10);
+}
+
+function wavePath(level, t) {
+  const yBase = 118 - level * 112;
+  let d = `M-30,132 L-30,${yBase}`;
+  for (let x = -30; x <= 152; x += 12) {
+    d += ` L${x},${Math.round((yBase + Math.sin((x + t * 46) * 0.09) * 3.4) * 10) / 10}`;
+  }
+  return d + ` L152,132 Z`;
+}
+
+function morphLoaderHtml() {
+  return `<div class="morph-loader">
+    <svg class="morph-svg" viewBox="0 0 120 120" aria-hidden="true">
+      <defs>
+        <linearGradient id="morphGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#e0245e"/><stop offset="1" stop-color="#ff5e3a"/>
+        </linearGradient>
+        <clipPath id="morphClip"><path id="morphClipPath" d=""/></clipPath>
+      </defs>
+      <path id="morphShapePath" class="morph-shape" fill="rgba(224,36,94,.10)"
+            stroke="url(#morphGrad)" stroke-width="3" stroke-linejoin="round"/>
+      <g clip-path="url(#morphClip)">
+        <path id="morphWater" class="morph-water" fill="url(#morphGrad)" opacity=".55"/>
+      </g>
+    </svg>
+  </div>`;
+}
+
+const MORPH_CYCLE = 2600; // ms per square→triangle→circle + fill cycle
+function startMorph() {
+  const wrap = live && live.wrap;
+  if (!wrap) return;
+  const shape = wrap.querySelector("#morphShapePath");
+  const clipShape = wrap.querySelector("#morphClipPath");
+  const water = wrap.querySelector("#morphWater");
+  if (!shape || !water) return;
+  let t0 = performance.now();
+  let raf = 0;
+  (function frame(now) {
+    if (!live || !document.getElementById(live.wrap.id)) return; // finalized
+    const el = (now - t0) % MORPH_CYCLE;
+    const shapeT = (el / (MORPH_CYCLE / 3)) % 3;
+    const k0 = Math.floor(shapeT) % 3;
+    const k1 = (k0 + 1) % 3;
+    const st = shapeT - Math.floor(shapeT);
+    const e = st < 0.5 ? 2 * st * st : 1 - Math.pow(-2 * st + 2, 2) / 2;
+    const d = pathFromPts(lerpPts(MORPH_KEYS[k0], MORPH_KEYS[k1], e));
+    shape.setAttribute("d", d);
+    clipShape.setAttribute("d", d);
+    water.setAttribute("d", wavePath(Math.min(1, (el / MORPH_CYCLE) * 1.5), now / 1000));
+    raf = requestAnimationFrame(frame);
+    live.raf = raf;
+  })(t0);
+}
+
+function stopMorph() {
+  if (live && live.raf) { cancelAnimationFrame(live.raf); live.raf = 0; }
+  const l = live && live.wrap.querySelector(".morph-loader");
+  if (l) {
+    l.classList.add("done");
+    setTimeout(() => { if (l.parentNode) l.parentNode.removeChild(l); }, 420);
+  }
+}
 
 function ensureLiveBubble() {
   if (live && document.getElementById(live.wrap.id)) return live;
@@ -429,7 +510,8 @@ function ensureLiveBubble() {
   wrap.innerHTML = `
     ${avatarHtml("bot")}
     <div class="bubble live-bubble">
-      <span class="live-status">در حال برقراری ارتباط با موتور فکری...</span><span class="caret"></span>
+      ${morphLoaderHtml()}
+      <span class="live-status">در حال برقراری ارتباط با موتور فکری...</span>
     </div>
     <div class="msg-side"></div>`;
   chatEl.appendChild(wrap);
@@ -438,7 +520,9 @@ function ensureLiveBubble() {
     bubble: wrap.querySelector(".bubble"),
     status: wrap.querySelector(".live-status"),
     buf: "",
+    raf: 0,
   };
+  startMorph();
   scrollDown();
   return live;
 }
@@ -452,6 +536,7 @@ function setProgress(pct, phase) {
    busy). When an answer arrives it is finalized by showAnswer() instead. */
 function hideProgress(burst) {
   if (live) {
+    stopMorph();
     const w = live.wrap;
     live = null;
     if (w && w.parentNode) w.parentNode.removeChild(w);
@@ -486,6 +571,8 @@ function showAnswer(reply) {
   if (live && document.getElementById(live.wrap.id)) {
     const bubble = live.bubble;
     const wrap = live.wrap;
+    stopMorph(); // loader fades away - the answer materializes in its place
+    bubble.classList.remove("live-bubble"); // back to a normal answer bubble
     bubble.classList.add("typing");
     bubble.innerHTML = '<span class="caret"></span>';
     typeInto(bubble, reply, () => {

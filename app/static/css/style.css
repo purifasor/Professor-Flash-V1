@@ -285,11 +285,11 @@ body::before {
 .msg-side .act-dl:hover { color: var(--accent-2); border-color: rgba(255,94,58,.5); }
 .msg-side .act-copy svg, .msg-side .act-dl svg { width: 13px; height: 13px; }
 
-/* live answer box: the reply is typed into this bubble, no % counter */
-.bubble.live-bubble { min-height: 48px; transition: border-color .2s; }
+/* live answer box: morphing loader + status, then the typed reply */
+.bubble.live-bubble { min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; transition: border-color .2s; }
 .bubble.live-bubble .live-status {
-  display: block; font-size: 12.5px; color: var(--muted);
-  margin-bottom: 8px; line-height: 1.6;
+  font-size: 12.5px; color: var(--muted);
+  line-height: 1.6; text-align: center; max-width: 90%;
 }
 .bubble.live-bubble .caret {
   display: inline-block; width: 2px; height: 16px;
@@ -299,6 +299,23 @@ body::before {
 }
 @keyframes caretBlink { 50% { opacity: 0; } }
 .bubble.live-bubble.typing { border-color: rgba(224, 36, 94, 0.65); box-shadow: 0 0 18px rgba(224, 36, 94, 0.12); }
+
+/* morphing loader: square → triangle → circle with liquid fill */
+.morph-loader {
+  width: min(104px, 24vw); height: 104px;
+  flex: none; transition: opacity .42s ease, transform .42s ease;
+}
+.morph-loader.done { opacity: 0; transform: scale(.55) rotate(24deg); }
+.morph-svg {
+  width: 100%; height: 100%; overflow: visible;
+  filter: drop-shadow(0 0 16px rgba(224, 36, 94, 0.35));
+}
+.morph-svg .morph-shape { transition: none; }
+.morph-svg .morph-water { transition: none; }
+@media (max-width: 520px) {
+  .morph-loader { width: 86px; height: 86px; }
+  .bubble.live-bubble { min-height: 112px; }
+}
 
 /* code blocks inside messages */
 .code-head {

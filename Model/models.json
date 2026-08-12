@@ -1,16 +1,45 @@
 {
   "model": "Professor Flash V1",
-  "brain": "PRF TRIAD",
+  "brain": "PRF",
   "unrestricted": true,
   "premium_env_keys": ["GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
+  "primary": ["Qwen3.5-397B-A17B"],
   "anonymous": [
     {
       "provider": "OVH",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       "models": ["Qwen3.5-397B-A17B", "gpt-oss-120b", "Meta-Llama-3_3-70B-Instruct"],
+      "sizes": {
+        "Qwen3.5-397B-A17B": "397B",
+        "gpt-oss-120b": "120B",
+        "Meta-Llama-3_3-70B-Instruct": "70B"
+      },
+      "primary": ["Qwen3.5-397B-A17B"],
       "free": true,
       "key": null,
-      "rate": "~2 rpm shared"
+      "rate": "~2 rpm shared",
+      "note": "Qwen3.5-397B (397B) is the ONLY free anonymous model above 300B reachable today. The 120B/70B stay only as availability fallbacks so a rate-limited giant never becomes a «مشغول‌اند» dead-end."
     }
-  ]
+  ],
+  "emergency": [
+    {
+      "provider": "Kilo",
+      "url": "https://api.kilo.ai/api/gateway/chat/completions",
+      "models": ["openrouter/free", "kilo-auto/free"],
+      "free": true,
+      "key": null,
+      "rate": "~200 req/hr",
+      "note": "emergency pool - only used when every OVH model is busy"
+    },
+    {
+      "provider": "Pollinations",
+      "url": "https://text.pollinations.ai/",
+      "free": true,
+      "key": null,
+      "rate": "free tier",
+      "note": "emergency pool - only used when every OVH model is busy"
+    }
+  ],
+  "banned": ["LLM7"],
+  "last_updated": "2026-08-13"
 }
