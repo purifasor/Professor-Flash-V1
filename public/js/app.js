@@ -303,22 +303,30 @@ function extForLang(lang) {
   return "txt";
 }
 
+/* copy button on EVERY message; download button ONLY on bot answers that
+   contain a code block (downloads just the code, with a real extension).
+   The check matches the real renderContent output: <pre class="code-block" ...> */
+function attachActions(wrap, role, text, bodyHtml) {
+  const body = bodyHtml || renderContent(text);
+  let actions = `<button class="act-copy" title="کپی پیام">${icon("copy")}</button>`;
+  if (role === "bot" && body.includes('<pre class="code-block"')) {
+    actions = `<button class="act-dl" title="دانلود کد">${icon("dl")}</button>` + actions;
+  }
+  const side = wrap.querySelector(".msg-side");
+  if (side) side.innerHTML = actions;
+}
+
 function addMessage(role, text, mid, animate) {
   const wrap = document.createElement("div");
   wrap.className = "msg " + (role === "user" ? "user" : "bot");
   wrap.dataset.mid = mid || "";
-  const bodyHtml = renderContent(text);
-  // copy button on EVERY message; download button ONLY on bot answers that
-  // contain a code block (downloads just the code, with a real extension)
-  let actions = `<button class="act-copy" title="کپی پیام">${icon("copy")}</button>`;
-  if (role === "bot" && /<pre class="code-block"/.test(bodyHtml)) {
-    actions = `<button class="act-dl" title="دانلود کد">${icon("dl")}</button>` + actions;
-  }
   wrap.dataset.raw = String(text);
+  const bodyHtml = renderContent(text);
   wrap.innerHTML = `
     ${avatarHtml(role)}
     <div class="bubble">${bodyHtml}</div>
-    <div class="msg-side">${actions}</div>`;
+    <div class="msg-side"></div>`;
+  attachActions(wrap, role, text, bodyHtml);
   chatEl.appendChild(wrap);
   if (animate !== false) scrollDown(role === "user");
   return wrap;
@@ -403,69 +411,93 @@ $("chatScroll").addEventListener("scroll", () => {
 });
 $("btnScrollDown").addEventListener("click", () => scrollDown(true));
 
-/* --------------------------------------- wait square (0->100 then morph)
-   A crimson square appears IN the chat when a message is sent: a spinning
-   ring + the real counter (0-100) driven by the time the server actually
-   spends answering. When the reply arrives it bursts and morphs away, so
-   the user always knows exactly how far the thinking has progressed. */
-let waitTimer = null;
+/* ----------------------------------------- live answer box (no % counter)
+   The answer box is created the moment a message is sent and stays in the
+   chat. While the brain works it shows a REAL status line (driven by actual
+   server progress events - never a fake timer), then the complete answer is
+   revealed word-by-word / line-by-line into the SAME box and finished with
+   copy + download actions. No percentage square, no locked counter - the
+   user always watches the reply materialize, and it is never half-written. */
+let live = null; // { wrap, bubble, status, buf }
 
-function createWaitSquare() {
-  let wrap = $("waitSquareMsg");
-  if (wrap) return wrap;
-  wrap = document.createElement("div");
-  wrap.className = "msg bot wait-msg";
-  wrap.id = "waitSquareMsg";
+function ensureLiveBubble() {
+  if (live && document.getElementById(live.wrap.id)) return live;
+  const wrap = document.createElement("div");
+  wrap.className = "msg bot";
+  wrap.id = "liveMsg";
+  wrap.dataset.raw = "";
   wrap.innerHTML = `
     ${avatarHtml("bot")}
-    <div class="wait-square" id="waitSquare">
-      <div class="ws-ring"></div>
-      <div class="ws-count"><span id="wsCount">0</span><span class="ws-pct">٪</span></div>
-      <span class="ws-phase" id="wsPhase">در حال ارسال درخواست...</span>
-    </div>`;
+    <div class="bubble live-bubble">
+      <span class="live-status">در حال برقراری ارتباط با موتور فکری...</span><span class="caret"></span>
+    </div>
+    <div class="msg-side"></div>`;
   chatEl.appendChild(wrap);
+  live = {
+    wrap,
+    bubble: wrap.querySelector(".bubble"),
+    status: wrap.querySelector(".live-status"),
+    buf: "",
+  };
   scrollDown();
-  return wrap;
+  return live;
 }
 
-/* the counter is MONOTONIC within one run: real progress events can arrive
-   out of order (a retry boost reports a lower stage number than a reply that
-   already arrived), so the displayed percent only ever goes up - it never
-   resets or jumps back to «برقراری اتصال». It resets only on a new send. */
-let dispPct = 0;
+/* real server progress events drive the status line inside the answer box */
 function setProgress(pct, phase) {
-  const p = Math.max(0, Math.min(100, Math.round(pct)));
-  if (p < dispPct && p !== 100) return; // ignore stale/lower events
-  dispPct = p;
-  const cnt = $("wsCount");
-  if (cnt) cnt.textContent = p;
-  const sq = $("waitSquare");
-  if (sq) sq.style.setProperty("--p", p);
-  const ph = $("wsPhase");
-  if (ph && phase) ph.textContent = phase;
+  if (live && phase) live.status.textContent = phase;
 }
 
-/* burst: the square scales up into a glow and morphs away - the moment the
-   real answer bubble rises in right behind it */
+/* remove the live box ONLY when there is no answer to show (error / final
+   busy). When an answer arrives it is finalized by showAnswer() instead. */
 function hideProgress(burst) {
-  if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
-  const wrap = $("waitSquareMsg");
-  if (wrap) {
-    const sq = $("waitSquare");
-    if (sq && burst) sq.classList.add("burst");
-    setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, burst ? 620 : 10);
+  if (live) {
+    const w = live.wrap;
+    live = null;
+    if (w && w.parentNode) w.parentNode.removeChild(w);
   }
 }
 
-/* the counter is tied to REAL server activity only: it starts at 0 and moves
-   exclusively on real progress events streamed by /api/chat - never on a fake
-   timer. It reaches 100 only when the answer arrives. */
-let lastLogLen = 0;
 function startWaiting() {
-  createWaitSquare();
-  lastLogLen = 0;
-  dispPct = 0;
+  ensureLiveBubble();
   setProgress(0, "در حال برقراری ارتباط با موتور فکری...");
+}
+
+/* reveal the full answer chunk-by-chunk into the live box, then finalize */
+function typeInto(bubble, finalText, onDone) {
+  const chunks = String(finalText).match(/.{1,60}(\s|$)/gs) || [String(finalText)];
+  let i = 0;
+  (function step() {
+    if (i >= chunks.length) {
+      bubble.classList.remove("typing");
+      if (onDone) onDone();
+      return;
+    }
+    live.buf += chunks[i++];
+    bubble.innerHTML = renderContent(live.buf) + '<span class="caret"></span>';
+    scrollDown();
+    setTimeout(step, 12);
+  })();
+}
+
+/* deliver the final answer: if the live box exists it is typed into it and
+   finalized; otherwise (legacy path) a normal message is appended */
+function showAnswer(reply) {
+  if (live && document.getElementById(live.wrap.id)) {
+    const bubble = live.bubble;
+    const wrap = live.wrap;
+    bubble.classList.add("typing");
+    bubble.innerHTML = '<span class="caret"></span>';
+    typeInto(bubble, reply, () => {
+      bubble.innerHTML = renderContent(reply);
+      wrap.dataset.raw = String(reply);
+      attachActions(wrap, "bot", reply, renderContent(reply));
+      live = null;
+    });
+  } else {
+    addMessage("assistant", reply, null);
+  }
+  lsAppend(state.sessionId, "assistant", reply);
 }
 
 /* ------------------------------------------------------------- sandbox */
@@ -507,6 +539,7 @@ function renderLogs(logs) {
 }
 
 /* ------------------------------------------------------------- polling */
+let lastLogLen = 0; // per-task log counter: how many server log lines were rendered
 async function pollTask(tid) {
   try {
     const r = await fetch("/api/task/" + tid);
@@ -523,8 +556,8 @@ async function pollTask(tid) {
       // the loader must stay the LAST message: move it under the todo list
       const th = $("thinking");
       if (th && th.parentNode) th.parentNode.appendChild(th);
-      const ws = $("waitSquareMsg");
-      if (ws && ws.parentNode) ws.parentNode.appendChild(ws);
+      const lv = $("liveMsg");
+      if (lv && lv.parentNode) lv.parentNode.appendChild(lv);
     }
 
     if (t.status === "running" || t.status === "queued" || t.status === "paused") {
@@ -540,31 +573,29 @@ async function pollTask(tid) {
         setProgress(88 + Math.round(11 * done / t.todos.length), "در حال انجام کارها (" + done + "/" + t.todos.length + ")...");
       } else if (t.logs && t.logs.length > lastLogLen) {
         lastLogLen = t.logs.length;
-        const cur = parseInt((($("wsCount") || {}).textContent || "4"), 10) || 4;
-        setProgress(Math.min(92, cur + 5), "مدل فکری در حال کار...");
+        setProgress(0, "مدل فکری در حال کار...");
       } else if (t.status === "queued") {
-        setProgress(84, "در صف انتظار...");
+        setProgress(0, "در صف انتظار...");
       }
       state.pollTimer = setTimeout(() => pollTask(tid), 700);
       return;
     }
 
-    // finished - the answer is here: hit 100, burst the square, remove the
-    // todo checklist too, then show the reply
+    // finished - the answer is here: remove the todo checklist and reveal it
+    // in the live answer box (never a half-written reply, never a % counter)
     stopPolling(true);
-    setProgress(100, "پاسخ آماده شد");
-    setTimeout(() => hideProgress(true), 180);
     clearTodoLive();
     removeThinking();
     controlsEl.hidden = true;
     taskStateEl.textContent = "";
     if (t.status === "error") {
+      hideProgress();
       addNote("خطا: " + (t.error || "نامشخص"));
       return;
     }
     if (t.status === "stopped") {
       addNote("کار متوقف شد.");
-      if (t.reply) addMessage("assistant", t.reply, null);
+      if (t.reply) showAnswer(t.reply);
       return;
     }
     if (t.reply) {
@@ -572,8 +603,8 @@ async function pollTask(tid) {
       // message automatically (up to 3 times) so the user never sees a dead end.
       const busy = /شلوغ/.test(t.reply) && t.reply.length < 200 && !/```/.test(t.reply);
       if (busy && (state.autoRetries || 0) < 3) {
-        // SILENT retry: keep the square alive with a calm status - never show
-        // the scary «شلوغ بود» error. The user just sees the brain still
+        // SILENT retry: keep the live box alive with a calm status - never
+        // show the scary «شلوغ بود» error. The user just sees the brain still
         // working; the same message is re-sent and re-queued automatically.
         state.autoRetries = (state.autoRetries || 0) + 1;
         stopPolling(true);
@@ -584,10 +615,10 @@ async function pollTask(tid) {
       }
       state.autoRetries = 0;
       if (busy) {
+        hideProgress();
         addNote("همه موتورهای رایگان در این لحظه مشغول‌اند؛ چند لحظه بعد دوباره بپرس.");
       } else {
-        addMessage("assistant", t.reply, null);
-        lsAppend(state.sessionId, "assistant", t.reply);
+        showAnswer(t.reply);
       }
     }
     loadModel(); // refresh brain badge + learned count
@@ -617,10 +648,10 @@ function stopPolling(keepSquare) {
 }
 
 /* --------------------------------------------------------------- send */
-/* CONNECT-FIRST: the counting square is only shown AFTER the connection to
-   the model is established (the server's `start` event). If the server is
-   busy/unreachable the user gets a plain note - never a locked counter. The
-   counter itself is driven by REAL server progress events, not a fake timer.*/
+/* CONNECT-FIRST: the live answer box is created the moment a message is sent.
+   Its status line is driven by REAL server progress events (never a fake
+   timer), and the complete reply is typed into the SAME box - no % counter.
+   If the server is busy/unreachable the user gets a plain note instead. */
 
 function streamBusy(reply) {
   return /شلوغ/.test(reply) && reply.length < 200 && !/```/.test(reply);
@@ -659,11 +690,8 @@ function finishStream(ev, text) {
     refreshSessions();
     return;
   }
-  setProgress(100, "پاسخ آماده شد");
-  setTimeout(() => hideProgress(true), 180);
   clearTodoLive();
-  addMessage("assistant", reply, null);
-  lsAppend(state.sessionId, "assistant", reply);
+  showAnswer(reply);
   loadModel(); // refresh brain badge + learned count
   refreshSessions(); // refresh sidebar counts (keeps the chat DOM intact)
   state.busy = false;
@@ -692,7 +720,7 @@ async function consumeStream(r, text) {
           state.streaming = true;
           if (ev.taskId) state.taskId = ev.taskId;
           if (ev.sessionId) state.sessionId = ev.sessionId;
-          startWaiting(); // connection established - NOW the counter runs
+          startWaiting(); // connection established - live box status updates here
         } else if (ev.type === "progress") {
           setProgress(ev.p, ev.phase);
         } else if (ev.type === "done") {
@@ -742,6 +770,7 @@ async function send(text, silentRetry) {
   }
   clearTodoLive();
   setTaskStatus("running");
+  ensureLiveBubble(); // the answer box exists from the first moment - no % counter
 
   // the server never stores chats: it gets this client's recent context with
   // each request and forgets it - history stays private on this machine
@@ -772,8 +801,7 @@ async function send(text, silentRetry) {
     // legacy synchronous fallback (older server): the request already ran,
     // poll the finished task exactly as before
     const data = await r.json();
-    if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
-    setProgress(90, "در حال دریافت پاسخ...");
+    setProgress(0, "در حال دریافت پاسخ...");
     if (data.sessionId) state.sessionId = data.sessionId;
     if (data.control) {
       removeThinking();

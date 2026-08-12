@@ -1878,6 +1878,68 @@ def _is_lang_mismatch(reply, user_text):
         return False
 
 
+def _is_truncated(text):
+    """A reply that was cut off mid-way (fenced code not closed, an HTML page
+    that never closes <html>/<style>/<script>, or text ending inside a tag) is
+    NOT a complete answer. The engine re-runs / continues it instead of ever
+    handing the user a half-written file."""
+    try:
+        t = str(text or "")
+        if not t:
+            return False
+        # odd number of fences => an open ``` block was never closed
+        if t.count("```") % 2 == 1:
+            return True
+        low = t.lower()
+        for op, cl in (("<html", "</html>"), ("<!doctype", "</html>"),
+                       ("<style", "</style>"), ("<script", "</script>"),
+                       ("<body", "</body>")):
+            if op in low and cl not in low:
+                return True
+        # text ends inside an HTML tag (e.g. a dangling `<div` ...)
+        if re.search(r"<[a-zA-Z/][^>]*$", t):
+            return True
+        # unbalanced braces: CSS/JS/object cut mid-block (e.g. `.box { ... width`
+        # with the closing `}` never written)
+        if t.count("{") > t.count("}"):
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _code_budget(text):
+    """A request that asks for code / a site / a build gets a much bigger token
+    budget (6000) so long single-file answers are NEVER cut at 1600 tokens.
+    Normal chat keeps the fast small budget."""
+    s = _norm(text)
+    if ("کد" in s or "سایت" in s or "بنویس" in s or "بساز" in s or "صفحه" in s
+            or "طراحی" in s or "html" in s or "css" in s or "python" in s
+            or "پایتون" in s or "```" in text or "تک فایل" in s or "فایل" in s):
+        return 6000
+    return 1600
+
+
+def _continue_truncated(messages, system, partial, timeout=12, max_tokens=6000, cb=None):
+    """Repair a cut-off answer: feed the partial reply back to the brain and ask
+    it to continue EXACTLY from the cut point and close every open block. The
+    final reply is the partial + the continuation, so the user gets one
+    complete, unbroken file/answer."""
+    msgs = list(messages)
+    msgs.append({"role": "assistant", "content": partial})
+    msgs.append({"role": "user",
+                 "content": ("ادامه بده: پاسخ بالا وسطش قطع شده است. دقیقاً از همان نقطه‌ای "
+                              "که قطع شده ادامه بده و آن را کامل کن — کد/متن را تمام کن، "
+                              "همه بلاک‌ها را ببند، چیزی را تکرار نکن و فقط قسمت باقی‌مانده را بنویس.")})
+    out, prov = brain([{"role": "system", "content": system}] + msgs,
+                      timeout=timeout, max_tokens=max_tokens, cb=cb)
+    if out:
+        out = _clean_reply(out)
+        if out.strip():
+            return (partial.rstrip() + "\n" + out).strip(), prov
+    return None, None
+
+
 def _brand(prov):
     """Human label: «موتور فکری PRF 397B» - the real parameter of the model
     that actually answered, never the raw provider name."""
@@ -1966,7 +2028,8 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None, dark=
             return False
         if (_is_refusal(t) or _is_short_evasion(t, user_text)
                 or _is_garbage(t) or _has_tail_lecture(t)
-                or _is_lang_mismatch(t, user_text)):
+                or _is_lang_mismatch(t, user_text)
+                or _is_truncated(t)):
             return False
         return True
 
@@ -1981,6 +2044,29 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None, dark=
     if out:
         refused |= _prov_keys(prov)
         _mark_prov_cooldown(prov or "", 15)
+
+    # a cut-off answer (unclosed fence / half-written file) is repaired by a
+    # continuation pass before any refusal-boost: the brain finishes the exact
+    # partial instead of starting over, so code is NEVER delivered truncated.
+    if out and _is_truncated(out) and time.time() < chain_deadline - 15:
+        if cb:
+            cb(60, "تکمیل خودکار پاسخ ناقص...")
+        full2, prov2 = _continue_truncated(msgs, system, out,
+                                           timeout=min(14, remain()),
+                                           max_tokens=6000, cb=cb)
+        if full2 and ok(full2):
+            if cb:
+                cb(75, "پاسخ کامل شد")
+            return full2, prov2
+        if full2 and _is_truncated(full2) and time.time() < chain_deadline - 8:
+            # one more continuation round if the first repair was itself cut
+            full3, prov3 = _continue_truncated(msgs, system, full2,
+                                               timeout=min(10, remain()),
+                                               max_tokens=6000, cb=cb)
+            if full3 and ok(full3):
+                return full3, prov3
+        if not full2:
+            pass  # fall through to the boost chain for a fresh attempt
 
     boost_chain = ((REFUSAL_BOOST_DARK1, REFUSAL_BOOST_DARK2, REFUSAL_BOOST_DARK3,
                     REFUSAL_BOOST3, REFUSAL_BOOST4, REFUSAL_BOOST5, REFUSAL_BOOST6)
@@ -2006,7 +2092,8 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None, dark=
             sal = _strip_refusal(out2)
             if (sal and len(sal) > 3 and not _is_garbage(sal)
                     and not _is_short_evasion(sal, user_text)
-                    and not _is_refusal(sal) and not _has_tail_lecture(sal)):
+                    and not _is_refusal(sal) and not _has_tail_lecture(sal)
+                    and not _is_truncated(sal)):
                 if cb:
                     cb(78, "پاسخ تأیید شد")
                 return sal, prov2
@@ -2032,7 +2119,8 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None, dark=
             sal = _strip_refusal(out3)
             if (sal and len(sal) > 3 and not _is_garbage(sal)
                     and not _is_short_evasion(sal, user_text)
-                    and not _is_refusal(sal) and not _has_tail_lecture(sal)):
+                    and not _is_refusal(sal) and not _has_tail_lecture(sal)
+                    and not _is_truncated(sal)):
                 if cb:
                     cb(78, "پاسخ تأیید شد")
                 return sal, prov3
@@ -2062,7 +2150,7 @@ def _ask(messages, system, timeout=11, max_tokens=1200, _depth=0, cb=None, dark=
 def _handler_chat(text, history, cb=None):
     msgs = [{"role": m["role"], "content": m["text"]} for m in history[-8:]]
     msgs.append({"role": "user", "content": text})
-    out, prov = _ask(msgs, _system(SYSTEM_QUESTION, text), max_tokens=1600, cb=cb)
+    out, prov = _ask(msgs, _system(SYSTEM_QUESTION, text), max_tokens=_code_budget(text), cb=cb)
     return out, prov
 
 
@@ -2170,7 +2258,7 @@ def _handler_snippet(text, cb=None):
     sysmsg = _system(SYSTEM_SNIPPET, text) + (
         "\n\nThe user asked for: " + text
     )
-    out, prov = _ask([{"role": "user", "content": text}], sysmsg, cb=cb)
+    out, prov = _ask([{"role": "user", "content": text}], sysmsg, max_tokens=6000, cb=cb)
     if out:
         # writing habit: when a code block is present, drop trailing prose
         # (line-by-line explanations) so the user gets clean, complete code
@@ -2306,7 +2394,7 @@ def _handler_build(text, cb=None):
         )
     if cb:
         cb(25, "در حال طراحی معماری برنامه...")
-    out, prov = _ask([{"role": "user", "content": text}], sysmsg, timeout=40, max_tokens=3200, cb=cb)
+    out, prov = _ask([{"role": "user", "content": text}], sysmsg, timeout=40, max_tokens=6000, cb=cb)
     if not out:
         return None, None, todos, prov
     files = _parse_files(out)
@@ -2559,7 +2647,7 @@ def _dispatch_route(route, text, client_history, session, use_client_store, logs
                     cb(40 + _r * 6, "در انتظار آزاد شدن سرویس‌های رایگان...")
                 time.sleep(22)
             if sysmsg:
-                mt = 1600 if route == "chat" else 1200
+                mt = _code_budget(text) if route in ("chat", "snippet", "build") else 1600
                 reply, prov = brain([{"role": "system", "content": sysmsg},
                                      {"role": "user", "content": text}],
                                     timeout=14, max_tokens=mt, cb=cb)
