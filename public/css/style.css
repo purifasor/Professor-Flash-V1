@@ -537,6 +537,36 @@ body::before {
 .bubble li::marker { color: var(--accent); font-weight: 700; }
 .bubble li > strong:first-child { color: #ffd9e4; }
 .bubble p { margin: 8px 0; }
+
+/* markdown tables inside assistant messages */
+.bubble .md-table {
+  margin: 12px 0;
+  overflow-x: auto;
+  border: 1px solid rgba(224, 36, 94, 0.28);
+  border-radius: 10px;
+  background: rgba(224, 36, 94, 0.05);
+}
+.bubble .md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 320px;
+  font-size: 12.5px;
+}
+.bubble .md-table th {
+  background: rgba(224, 36, 94, 0.16);
+  color: #ffe3ea;
+  font-weight: 800;
+  padding: 8px 12px;
+  text-align: right;
+  border-bottom: 1px solid rgba(224, 36, 94, 0.35);
+  white-space: nowrap;
+}
+.bubble .md-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(224, 36, 94, 0.12);
+  line-height: 1.7;
+}
+.bubble .md-table tr:last-child td { border-bottom: none; }
 .bubble code:not(.code-block code) {
   font-family: var(--mono); font-size: 12px;
   background: rgba(224, 36, 94, 0.12);

@@ -123,10 +123,34 @@ function mdToHtml(text) {
   let html = "";
   let listType = null;
   const closeList = () => { if (listType) { html += "</" + listType + ">"; listType = null; } };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
     let m;
     if (!line.trim()) { closeList(); continue; }
+    // markdown table: consecutive rows of | a | b | (with an optional |---|---| separator)
+    if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+      closeList();
+      const rows = [];
+      while (i < lines.length) {
+        const l2 = lines[i].trim();
+        if (l2.startsWith("|") && l2.endsWith("|")) { rows.push(l2); i++; }
+        else break;
+      }
+      i--;
+      const cellsOf = (row) => row.slice(1, -1).split("|").map((c) => c.trim());
+      let tbl = '<div class="md-table"><table>';
+      let first = true;
+      for (const row of rows) {
+        const cells = cellsOf(row);
+        const sep = cells.length && cells.every((c) => /^:?-{2,}:?$/.test(c.replace(/\s/g, "")));
+        if (sep) continue;
+        const tag = first ? "th" : "td";
+        first = false;
+        tbl += "<tr>" + cells.map((c) => `<${tag}>${inlineMd(c)}</${tag}>`).join("") + "</tr>";
+      }
+      html += tbl + "</table></div>";
+      continue;
+    }
     m = line.match(/^(#{1,4})\s+(.*)$/);
     if (m) { closeList(); const lv = m[1].length; html += `<h${lv}>${inlineMd(m[2])}</h${lv}>`; continue; }
     if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { closeList(); html += "<hr>"; continue; }
