@@ -546,16 +546,23 @@ async function pollTask(tid) {
       // message automatically (up to 3 times) so the user never sees a dead end.
       const busy = /شلوغ/.test(t.reply) && t.reply.length < 200 && !/```/.test(t.reply);
       if (busy && (state.autoRetries || 0) < 3) {
+        // SILENT retry: keep the square alive with a calm status - never show
+        // the scary «شلوغ بود» error. The user just sees the brain still
+        // working; the same message is re-sent and re-queued automatically.
         state.autoRetries = (state.autoRetries || 0) + 1;
-        stopPolling();
+        stopPolling(true);
         const txt = state.pendingText;
-        addNote("سرویس‌های رایگان شلوغ بودند؛ تلاش مجدد خودکار (" + state.autoRetries + "/3)...");
+        setTaskStatus("در حال تلاش مجدد...");
         setTimeout(() => { state.busy = false; send(txt, true); }, 3500 * state.autoRetries);
         return;
       }
       state.autoRetries = 0;
-      addMessage("assistant", t.reply, null);
-      lsAppend(state.sessionId, "assistant", t.reply);
+      if (busy) {
+        addNote("همه موتورهای رایگان در این لحظه مشغول‌اند؛ چند لحظه بعد دوباره بپرس.");
+      } else {
+        addMessage("assistant", t.reply, null);
+        lsAppend(state.sessionId, "assistant", t.reply);
+      }
     }
     loadModel(); // refresh brain badge + learned count
     refreshSessions(); // refresh sidebar counts (keeps the chat DOM intact)
@@ -609,13 +616,23 @@ function finishStream(ev, text) {
     return;
   }
   if (streamBusy(reply) && (state.autoRetries || 0) < 3) {
+    // SILENT retry: keep the square alive with a calm status - never show
+    // the scary «شلوغ بود» error. The user just sees the brain still working.
     state.autoRetries = (state.autoRetries || 0) + 1;
-    hideProgress(true);
-    addNote("سرویس‌های رایگان شلوغ بودند؛ تلاش مجدد خودکار (" + state.autoRetries + "/3)...");
+    setProgress(40 + state.autoRetries * 8, "در حال تلاش مجدد...");
     setTimeout(() => { state.busy = false; send(text, true); }, 3500 * state.autoRetries);
     return;
   }
   state.autoRetries = 0;
+  if (streamBusy(reply)) {
+    // after 3 silent retries the free providers are genuinely saturated:
+    // show a calm note instead of the raw «شلوغ بود» text as an answer
+    hideProgress(true);
+    addNote("همه موتورهای رایگان در این لحظه مشغول‌اند؛ چند لحظه بعد دوباره بپرس.");
+    loadModel();
+    refreshSessions();
+    return;
+  }
   setProgress(100, "پاسخ آماده شد");
   setTimeout(() => hideProgress(true), 180);
   clearTodoLive();
