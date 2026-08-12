@@ -400,20 +400,14 @@ function hideProgress(burst) {
   }
 }
 
-/* the counter is tied to REAL server activity: it creeps slowly on a timer so
-   it never freezes on one number, then JUMPS on each real poll event (new
-   logs / todo steps done), and only reaches 100 when the answer arrives. */
+/* the counter is tied to REAL server activity only: it starts at 0 and moves
+   exclusively on real progress events streamed by /api/chat - never on a fake
+   timer. It reaches 100 only when the answer arrives. */
 let lastLogLen = 0;
 function startWaiting() {
   createWaitSquare();
   lastLogLen = 0;
-  setProgress(4, "در حال ارسال درخواست...");
-  const t0 = Date.now();
-  waitTimer = setInterval(() => {
-    const el = (Date.now() - t0) / 1000;
-    const p = 4 + 86 * (1 - Math.exp(-el / 26));
-    setProgress(p, "مدل فکری در حال فکر کردن و پاسخ...");
-  }, 500);
+  setProgress(0, "در حال برقراری ارتباط با موتور فکری...");
 }
 
 /* ------------------------------------------------------------- sandbox */
@@ -555,6 +549,84 @@ function stopPolling(keepSquare) {
 }
 
 /* --------------------------------------------------------------- send */
+/* CONNECT-FIRST: the counting square is only shown AFTER the connection to
+   the model is established (the server's `start` event). If the server is
+   busy/unreachable the user gets a plain note - never a locked counter. The
+   counter itself is driven by REAL server progress events, not a fake timer.*/
+
+function streamBusy(reply) {
+  return /شلوغ/.test(reply) && reply.length < 200 && !/```/.test(reply);
+}
+
+function finishStream(ev, text) {
+  stopPolling(true);
+  clearTodoLive();
+  removeThinking();
+  controlsEl.hidden = true;
+  taskStateEl.textContent = "";
+  const reply = ev && ev.reply;
+  if (ev && ev.todos && ev.todos.length) setTodoLive(ev.todos);
+  if (!reply) {
+    hideProgress(true);
+    addNote("پاسخی دریافت نشد. دوباره تلاش کن.");
+    state.busy = false;
+    return;
+  }
+  if (streamBusy(reply) && (state.autoRetries || 0) < 3) {
+    state.autoRetries = (state.autoRetries || 0) + 1;
+    hideProgress(true);
+    addNote("سرویس‌های رایگان شلوغ بودند؛ تلاش مجدد خودکار (" + state.autoRetries + "/3)...");
+    setTimeout(() => { state.busy = false; send(text, true); }, 3500 * state.autoRetries);
+    return;
+  }
+  state.autoRetries = 0;
+  setProgress(100, "پاسخ آماده شد");
+  setTimeout(() => hideProgress(true), 180);
+  clearTodoLive();
+  addMessage("assistant", reply, null);
+  lsAppend(state.sessionId, "assistant", reply);
+  loadModel(); // refresh brain badge + learned count
+  refreshSessions(); // refresh sidebar counts (keeps the chat DOM intact)
+  state.busy = false;
+}
+
+async function consumeStream(r, text) {
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let gotStart = false;
+  let doneEvt = null;
+  let ev = null;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.type === "start") {
+          gotStart = true;
+          if (ev.taskId) state.taskId = ev.taskId;
+          if (ev.sessionId) state.sessionId = ev.sessionId;
+          startWaiting(); // connection established - NOW the counter runs
+        } else if (ev.type === "progress") {
+          setProgress(ev.p, ev.phase);
+        } else if (ev.type === "done") {
+          doneEvt = ev;
+        }
+      }
+    }
+  } catch (e) { /* stream dropped: fall through */ }
+  // legacy server that never sent `start`: show the square so the user still
+  // sees thinking feedback, then finish with whatever arrived
+  if (!gotStart) startWaiting();
+  finishStream(doneEvt, text);
+}
+
 async function send(text, silentRetry) {
   text = (text || "").trim();
   if (!text || state.busy) return;
@@ -569,18 +641,32 @@ async function send(text, silentRetry) {
   cmdRendered = 0;
 
   if (!silentRetry) {
+    // a sent message opens a NEW page unless we're already on an empty one:
+    // refreshing NEVER spawns a page, only a real message does
+    const d0 = lsLoad();
+    const cur = (d0.sessions || []).find((s) => s.id === d0.active);
+    if (cur && (cur.messages || []).length > 0) {
+      const s2 = newSessionObj(PAGE);
+      d0.sessions = d0.sessions || [];
+      d0.sessions.push(s2);
+      d0.active = s2.id;
+      lsSave(d0);
+      state.sessionId = s2.id;
+      chatEl.innerHTML = "";
+      heroEl.classList.add("show");
+      clearTodoLive();
+    }
     addMessage("user", text, null);
     lsAppend(state.sessionId, "user", text);
     heroEl.classList.remove("show");
   }
   clearTodoLive();
   setTaskStatus("running");
-  startWaiting();
 
   // the server never stores chats: it gets this client's recent context with
   // each request and forgets it - history stays private on this machine
   const body = { message: text, sessionId: state.sessionId, clientId: clientId(),
-                 history: lsContext(state.sessionId, 8), mode: PAGE };
+                 history: lsContext(state.sessionId, 8), mode: PAGE, stream: true };
   if (PAGE === "agent") body.project = { path: state.agent.path, name: state.agent.name };
 
   try {
@@ -589,15 +675,23 @@ async function send(text, silentRetry) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await r.json();
     if (!r.ok) {
+      let msg = "خطا: " + r.status;
+      try { msg = "خطا: " + ((await r.json()).error || r.status); } catch (e) { /* keep */ }
       removeThinking();
       hideProgress();
-      addNote("خطا: " + (data.error || "نامشخص"));
+      addNote(msg);
       state.busy = false;
       return;
     }
-    // request returned: the brain finished - jump to the final stretch
+    const ct = (r.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("ndjson") || ct.includes("stream")) {
+      await consumeStream(r, text);
+      return;
+    }
+    // legacy synchronous fallback (older server): the request already ran,
+    // poll the finished task exactly as before
+    const data = await r.json();
     if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
     setProgress(90, "در حال دریافت پاسخ...");
     if (data.sessionId) state.sessionId = data.sessionId;
@@ -606,9 +700,6 @@ async function send(text, silentRetry) {
       addNote(data.note || "فرمان ثبت شد.");
       state.busy = false;
       return;
-    }
-    if (data.status === "queued") {
-      addNote(data.note || "پیام در صف قرار گرفت.");
     }
     state.taskId = data.taskId;
     pollTask(data.taskId);
@@ -620,6 +711,11 @@ async function send(text, silentRetry) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      const ct2 = (r2.headers.get("content-type") || "").toLowerCase();
+      if (r2.ok && (ct2.includes("ndjson") || ct2.includes("stream"))) {
+        await consumeStream(r2, text);
+        return;
+      }
       const data2 = await r2.json();
       if (r2.ok && data2.taskId) {
         if (data2.sessionId) state.sessionId = data2.sessionId;
@@ -877,14 +973,10 @@ function showWorkspace() {
     });
     await loadAgentConfig();
   } else {
-    // each page load opens a fresh session; older ones stay in localStorage
-    const d = lsLoad();
-    const s = newSessionObj(PAGE);
-    d.sessions = d.sessions || [];
-    d.sessions.push(s);
-    d.active = s.id;
-    lsSave(d);
-    state.sessionId = s.id;
+    // refresh keeps the SAME chat: reuse the active session (one is only
+    // created the very first time). New pages come from real messages only.
+    const d = lsEnsureActive(PAGE);
+    state.sessionId = d.active;
   }
   await loadSessions();
 })();
