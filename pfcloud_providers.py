@@ -248,21 +248,20 @@ def _try_completions(url, models, messages, timeout, max_tokens, label, skip=Non
             PROV_STATE["_net"] = PROV_STATE.get("_net", 0) + 1  # real attempt
             raw = _post_json(url, body, headers=headers, timeout=timeout)
             if not raw:
-                _mark(key, 12)
+                _mark(key, 8)
                 break
             try:
                 d = json.loads(raw)
                 if d.get("error"):
                     # 429/503: the endpoint's shared free tier is saturated -
-                    # park the WHOLE pool briefly so the chain falls through to
-                    # the emergency pools instead of burning attempts on a
-                    # provider that cannot answer right now.
+                    # park this provider ONLY for a short moment (8 s) and move
+                    # on - the emergency pools answer instead of us burning the
+                    # whole request budget waiting on a busy provider.
                     if attempt == 0 and d.get("status") in (429, 503):
                         for m in models:
-                            _mark(label + ":" + m, 25)
-                        time.sleep(1.5)
+                            _mark(label + ":" + m, 8)
                         continue
-                    _mark(key, 18)
+                    _mark(key, 12)
                     break
                 msg = (d.get("choices") or [{}])[0].get("message", {})
                 out = msg.get("content")
@@ -307,16 +306,17 @@ def _triad_sweep(messages, timeout, max_tokens, skip, cb=None):
     """PRF pool: fire the models (397B / 120B / 70B) in PARALLEL and select
     the BEST answer - not just the first one that answers.
 
-    Each model runs in its own thread with the same per-attempt budget, so the
-    whole sweep costs ~timeout worst-case but usually returns in the time of
-    the FASTEST model. The selector prefers the most complete answer (longest
-    real content) with the giant (Qwen-397B) kept as the preferred choice:
-    it wins ties and near-ties, but a substantially fuller answer from another
-    model is still picked.
+    Each model runs in its own thread. The sweep returns as soon as ALL
+    threads have finished (or the timeout hits) - it NEVER waits the full
+    timeout when every model is rate-limited/cooldowned, so a busy OVH does
+    not burn the whole request budget on a pointless wait. The selector
+    prefers the most complete answer with the giant (Qwen-397B) preferred:
+    it wins ties and near-ties, but a substantially fuller answer from
+    another model is still picked.
     """
     results = []
     lock = threading.Lock()
-    done = threading.Event()
+    remaining = [len(OVH_MODELS)]
 
     def run(model):
         try:
@@ -325,16 +325,27 @@ def _triad_sweep(messages, timeout, max_tokens, skip, cb=None):
             if r and r[0]:
                 with lock:
                     results.append((model, len(r[0]), r))
-                done.set()
         except Exception:
             pass
+        finally:
+            with lock:
+                remaining[0] -= 1
 
     threads = [threading.Thread(target=run, args=(m,), daemon=True) for m in OVH_MODELS]
     for t in threads:
         t.start()
     if cb:
         cb(30, "اجرای موازی استخر PRF (۳۹۷B / ۱۲۰B / ۷۰B)...")
-    done.wait(timeout)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with lock:
+            if remaining[0] <= 0:
+                break  # every model finished (success or rate-limit) - done
+            if results:
+                # first real answer arrived: tiny grace for the giant, then go
+                if time.time() > deadline - 1.5:
+                    break
+        time.sleep(0.1)
     if not results:
         return None
     with lock:
@@ -417,14 +428,15 @@ def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
             if cb:
                 cb(55, "پاسخ اولیه دریافت شد")
             return r
-    # 3) emergency free pools (Kilo, Pollinations) - guarantee an answer so
-    #    «مشغول‌اند» almost never reaches the user
+    # 3) emergency free pools - guarantee an answer so «مشغول‌اند» almost
+    #    never reaches the user. Pollinations FIRST (it answers reliably,
+    #    Kilo has been serving bot-check HTML pages instead of JSON lately).
     if rem() > 2.5:
         if cb:
             cb(40, "استفاده از سرویس‌های پشتیبان...")
-        r = _kilo(messages, timeout=min(9, rem()), max_tokens=max_tokens, skip=skip, cb=cb)
+        r = _pollinations(messages, timeout=min(9, rem()), max_tokens=max_tokens, skip=skip)
         if not (r and r[0]):
-            r = _pollinations(messages, timeout=min(9, rem()), max_tokens=max_tokens, skip=skip)
+            r = _kilo(messages, timeout=min(9, rem()), max_tokens=max_tokens, skip=skip, cb=cb)
         if r and r[0]:
             if cb:
                 cb(55, "پاسخ اولیه دریافت شد")
@@ -442,9 +454,9 @@ def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
                 cb(55, "پاسخ اولیه دریافت شد")
             return r
         if rem() > 2.5:
-            r = _kilo(messages, timeout=min(9, rem()), max_tokens=max_tokens, cb=cb)
+            r = _pollinations(messages, timeout=min(9, rem()), max_tokens=max_tokens)
             if not (r and r[0]):
-                r = _pollinations(messages, timeout=min(9, rem()), max_tokens=max_tokens)
+                r = _kilo(messages, timeout=min(9, rem()), max_tokens=max_tokens, cb=cb)
             if r and r[0]:
                 if cb:
                     cb(55, "پاسخ اولیه دریافت شد")

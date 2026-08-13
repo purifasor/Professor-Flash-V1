@@ -743,12 +743,10 @@ async function pollTask(tid) {
     }
     if (t.reply) {
       // «شلوغ بود» is a rate-limit hiccup, not an answer: retry the SAME
-      // message automatically (up to 3 times) so the user never sees a dead end.
+      // message once max - the server always answers (model or knowledge
+      // bank), so the user never waits minutes re-running the chain.
       const busy = /شلوغ/.test(t.reply) && t.reply.length < 200 && !/```/.test(t.reply);
-      if (busy && (state.autoRetries || 0) < 3) {
-        // SILENT retry: keep the live box alive with a calm status - never
-        // show the scary «شلوغ بود» error. The user just sees the brain still
-        // working; the same message is re-sent and re-queued automatically.
+      if (busy && (state.autoRetries || 0) < 1) {
         state.autoRetries = (state.autoRetries || 0) + 1;
         stopPolling(true);
         const txt = state.pendingText;
@@ -758,8 +756,8 @@ async function pollTask(tid) {
       }
       state.autoRetries = 0;
       if (busy) {
-        hideProgress();
-        addNote("همه موتورهای رایگان در این لحظه مشغول‌اند؛ چند لحظه بعد دوباره بپرس.");
+        // edge case: even the fallback was busy - show the real reply
+        showAnswer(t.reply);
       } else {
         showAnswer(t.reply);
       }
@@ -815,9 +813,10 @@ function finishStream(ev, text) {
     state.busy = false;
     return;
   }
-  if (streamBusy(reply) && (state.autoRetries || 0) < 3) {
-    // SILENT retry: keep the square alive with a calm status - never show
-    // the scary «شلوغ بود» error. The user just sees the brain still working.
+  if (streamBusy(reply) && (state.autoRetries || 0) < 1) {
+    // ONE silent retry max - the server now ALWAYS returns a real answer
+    // (model or PRF knowledge-bank fallback), so a busy hiccup resolves fast
+    // and the user never waits minutes re-running the chain.
     state.autoRetries = (state.autoRetries || 0) + 1;
     setProgress(40 + state.autoRetries * 8, "در حال تلاش مجدد...");
     setTimeout(() => { state.busy = false; send(text, true); }, 3500 * state.autoRetries);
@@ -825,10 +824,10 @@ function finishStream(ev, text) {
   }
   state.autoRetries = 0;
   if (streamBusy(reply)) {
-    // after 3 silent retries the free providers are genuinely saturated:
-    // show a calm note instead of the raw «شلوغ بود» text as an answer
-    hideProgress(true);
-    addNote("همه موتورهای رایگان در این لحظه مشغول‌اند؛ چند لحظه بعد دوباره بپرس.");
+    // absolute edge case: even the knowledge-bank fallback was busy - show
+    // the server's real reply instead of another dead-end note
+    clearTodoLive();
+    showAnswer(reply);
     loadModel();
     refreshSessions();
     return;
