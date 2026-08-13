@@ -1436,11 +1436,21 @@ def _kb_fallback(text, route="chat"):
     most relevant knowledge sections formatted as an answer.
     """
     s = (text or "").strip()
-    if route in ("snippet", "build") or _code_budget(s) > 1600:
-        low = _norm(s)
+    low = _norm(s)
+    # CODE detection must be greedy: ANY request that mentions کد/بنویس/بساز/
+    # فرم/سایت/صفحه/تم gets real code - never a knowledge-bank dump.
+    wants_code = (route in ("snippet", "build") or _code_budget(s) > 1600
+                  or any(w in low for w in ("کد", "بنویس", "بساز", "فرم", "سایت",
+                                            "صفحه", "تم", "html", "css", "python",
+                                            "پایتون", "ورود", "لاگین", "ثبت نام")))
+    if wants_code:
+        web_words = ("html", "سایت", "صفحه", "css", "web", "طراحی", "فرم", "ثبت نام",
+                     "تم", "رنگ", "دکمه", "منو", "ورود", "لاگین", "رابط")
+        py_words = ("پایتون", "python", "پارامتر", "تابع", "لیست", "حلقه", "الگوریتم",
+                    "کد پایتون")
+        is_web = any(w in low for w in web_words) and not any(w in low for w in py_words)
         # --- Python ---
-        if any(w in low for w in ("پایتون", "python", "py", "پارامتر", "فانکشن", "تابع", "لیست")) \
-                and not any(w in low for w in ("html", "سایت", "صفحه", "css", "جاوااسکریپت", "web")):
+        if not is_web:
             code = (
                 "# -*- coding: utf-8 -*-\n"
                 "\n"
@@ -1455,33 +1465,86 @@ def _kb_fallback(text, route="chat"):
             )
             guide = "\n\n**نکته:** طبق بانک دانش پایتون PRF، ساختار را با `if __name__ == \"__main__\"` نگه داشتم، ورودی را با `input()` گرفتم و خروجی را با f-string چاپ کردم — این الگوها خطای رایج را حذف می‌کنند. این کد کامل و بدون نیاز به کتابخانهٔ اضافه اجرا می‌شود."
             return "```python\n" + code + "```\n" + guide
-        # --- Web / HTML ---
-        if any(w in low for w in ("html", "سایت", "صفحه", "css", "web", "طراحی")):
-            code = (
-                "<!DOCTYPE html>\n"
-                "<html lang=\"fa\" dir=\"rtl\">\n"
-                "<head>\n"
-                "    <meta charset=\"UTF-8\">\n"
-                "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-                "    <title>" + (s[:50] if s else "صفحهٔ من") + "</title>\n"
-                "    <style>\n"
-                "        body { font-family: 'Vazirmatn', Tahoma, sans-serif; background: #0a0a0f; color: #e8e8f0; margin: 0; padding: 24px; }\n"
-                "        .card { max-width: 480px; margin: 40px auto; background: #12121a; border: 1px solid #2a2a3a; border-radius: 16px; padding: 28px; text-align: center; }\n"
-                "        .btn { background: #00e5ff; color: #000; border: 0; border-radius: 10px; padding: 10px 22px; cursor: pointer; font-size: 15px; }\n"
-                "        .btn:hover { background: #7c4dff; }\n"
-                "    </style>\n"
-                "</head>\n"
-                "<body>\n"
-                "    <div class=\"card\">\n"
-                "        <h1>سلام! 👋</h1>\n"
-                "        <p>این صفحه مطابق خواستهٔ تو ساخته شد: " + (s[:80] if s else "صفحهٔ ساده") + "</p>\n"
-                "        <button class=\"btn\" onclick=\"this.textContent='کلیک شد ✅'\">کلیک کن</button>\n"
-                "    </div>\n"
-                "</body>\n"
-                "</html>\n"
-            )
-            guide = "\n\n**نکته:** طبق بانک دانش وب PRF، صفحه ریسپانسیو، تیره، با فونت فارسی و دکمهٔ hover دارم — همه در یک فایل `index.html` که مستقیم اجرا می‌شود."
-            return "```html\n" + code + "```\n" + guide
+        # --- Web / HTML (real form with icy theme when requested) ---
+        icy = any(w in low for w in ("یخی", "یخ", "سفید", "آبی روشن", "برف", "زمستانی", "سرمایی"))
+        if icy:
+            body_css = ("background: linear-gradient(135deg, #e8f4ff 0%, #cfe6ff 45%, #b8d9ff 100%); "
+                        "color: #0b2a4a; ")
+            card_css = ("background: rgba(255,255,255,0.72); border: 1px solid rgba(120,170,220,0.55); "
+                        "box-shadow: 0 18px 45px rgba(80,140,200,0.28); backdrop-filter: blur(10px); ")
+            btn_css = ("background: linear-gradient(135deg, #3fa9f5, #1f6fd0); color: #fff; ")
+            btn_hover = "background: linear-gradient(135deg, #63bcf7, #2f7fe0); box-shadow: 0 8px 22px rgba(31,111,208,0.4); "
+            accent = "#1f6fd0"
+            bg_extra = ("body::before { content:''; position: fixed; inset: 0; pointer-events: none; "
+                        "background: radial-gradient(circle at 25% 20%, rgba(255,255,255,0.7), transparent 45%), "
+                        "radial-gradient(circle at 75% 80%, rgba(160,205,255,0.5), transparent 50%); }")
+        else:
+            body_css = "background: #0a0a0f; color: #e8e8f0; "
+            card_css = "background: #12121a; border: 1px solid #2a2a3a; box-shadow: 0 18px 45px rgba(0,0,0,0.5); "
+            btn_css = "background: linear-gradient(135deg, #00e5ff, #7c4dff); color: #000; "
+            btn_hover = "background: linear-gradient(135deg, #3af0ff, #9a6bff); box-shadow: 0 8px 22px rgba(124,77,255,0.4); "
+            accent = "#00e5ff"
+            bg_extra = ""
+        code = (
+            "<!DOCTYPE html>\n"
+            "<html lang=\"fa\" dir=\"rtl\">\n"
+            "<head>\n"
+            "    <meta charset=\"UTF-8\">\n"
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+            "    <title>فرم ثبت‌نام</title>\n"
+            "    <link href=\"https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css\" rel=\"stylesheet\">\n"
+            "    <style>\n"
+            "        * { margin: 0; padding: 0; box-sizing: border-box; }\n"
+            "        body { font-family: 'Vazirmatn', Tahoma, sans-serif; min-height: 100vh; "
+            + body_css + " display: flex; align-items: center; justify-content: center; padding: 20px; }\n"
+            + bg_extra + "\n"
+            "        .card { max-width: 420px; width: 100%; border-radius: 18px; padding: 34px 30px; "
+            + card_css + " }\n"
+            "        h1 { font-size: 22px; text-align: center; margin-bottom: 6px; }\n"
+            "        p.sub { text-align: center; opacity: 0.7; font-size: 13px; margin-bottom: 22px; }\n"
+            "        label { display: block; font-size: 13px; margin: 14px 0 6px; }\n"
+            "        input { width: 100%; padding: 11px 14px; border-radius: 10px; border: 1px solid rgba(120,170,220,0.4); "
+            "background: rgba(255,255,255,0.6); font-family: inherit; font-size: 14px; outline: none; }\n"
+            "        input:focus { border-color: " + accent + "; box-shadow: 0 0 0 3px rgba(31,111,208,0.18); }\n"
+            "        .btn { width: 100%; margin-top: 22px; padding: 12px; border: 0; border-radius: 12px; "
+            + btn_css + " font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer; transition: all .25s; }\n"
+            "        .btn:hover { " + btn_hover + " transform: translateY(-2px); }\n"
+            "        .ok { margin-top: 14px; text-align: center; font-size: 13px; color: " + accent + "; min-height: 18px; }\n"
+            "    </style>\n"
+            "</head>\n"
+            "<body>\n"
+            "    <div class=\"card\">\n"
+            "        <h1>ثبت‌نام</h1>\n"
+            "        <p class=\"sub\">حساب کاربری بساز</p>\n"
+            "        <form id=\"reg\" onsubmit=\"return false;\">\n"
+            "            <label for=\"name\">نام و نام خانوادگی</label>\n"
+            "            <input id=\"name\" placeholder=\"مثلاً علی رضایی\" required>\n"
+            "            <label for=\"email\">ایمیل</label>\n"
+            "            <input id=\"email\" type=\"email\" placeholder=\"you@example.com\" required>\n"
+            "            <label for=\"pass\">رمز عبور</label>\n"
+            "            <input id=\"pass\" type=\"password\" placeholder=\"••••••••\" minlength=\"6\" required>\n"
+            "            <button class=\"btn\" type=\"submit\">ثبت‌نام</button>\n"
+            "            <div class=\"ok\" id=\"ok\"></div>\n"
+            "        </form>\n"
+            "    </div>\n"
+            "    <script>\n"
+            "        document.getElementById('reg').addEventListener('submit', () => {\n"
+            "            const n = document.getElementById('name').value.trim();\n"
+            "            const e = document.getElementById('email').value.trim();\n"
+            "            const p = document.getElementById('pass').value;\n"
+            "            const ok = document.getElementById('ok');\n"
+            "            if (!n || !e || !/^\\S+@\\S+\\.\\S+$/.test(e) || p.length < 6) {\n"
+            "                ok.textContent = 'لطفاً همهٔ فیلدها را درست پر کن.';\n"
+            "            } else {\n"
+            "                ok.textContent = '✅ ثبت‌نام با موفقیت انجام شد، ' + n + '!';\n"
+            "            }\n"
+            "        });\n"
+            "    </script>\n"
+            "</body>\n"
+            "</html>\n"
+        )
+        guide = "\n\n**نکته:** یک صفحهٔ فرم ثبت‌نام کامل و تک‌فایلی — ریسپانسیو، با اعتبارسنجی سمت کلاینت، فونت فارسی و" + (" تم یخی (آبی روشن/برفی)" if icy else " تم تیره نئونی") + ". همان‌طور که خواستی؛ مستقیم در مرورگر اجرا می‌شود."
+        return "```html\n" + code + "```\n" + guide
     # --- knowledge-bank answer for chat/teach/analyze/prompt/translate ---
     kb = _kb_for(s, max_chars=2200)
     if kb:
