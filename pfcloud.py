@@ -34,7 +34,7 @@ from pfcloud_providers import (KILO_MODELS, KILO_URL, OVH_MODELS, OVH_URL, POLL_
                                PRIMARY_MODEL, PROV_STATE, TRIAD_PREF, brain, _cool,
                                _deepseek, _gemini, _kilo, _load_model_registry, _mark,
                                _openrouter, _ovh, _ovh_model, _pollinations,
-                               _triad_sweep, _try_completions)
+                               _set_session, _triad_sweep, _try_completions)
 from pfcloud_gates import (DEFLECT_RE, FINGLISH_RE, GENERIC_ERROR, I18N_REFUSAL,
                            REFUSAL_RE, SAFETY_RE, _brand, _clean_reply, _code_budget,
                            _has_tail_lecture, _is_garbage, _is_lang_mismatch,
@@ -1885,6 +1885,7 @@ def _stream_chat(tid, sid, cid, route, text, client_history, session, use_client
 
     def worker():
         try:
+            _set_session((session or {}).get("id") or sid)  # persistent conn
             def cb(p, phase):
                 q.put(("p", p, phase))
             reply, prov, todos = _dispatch_route(route, text, client_history, session,

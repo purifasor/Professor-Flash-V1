@@ -24,6 +24,51 @@ from pfcloud_util import _clean, _final_from_thinking, _get, _post_json
 
 POLL_URL = "https://text.pollinations.ai/"
 
+# ------------------------------------------------------------------ session
+# SESSION AFFINITY: once a session gets a good answer from a provider/model,
+# that exact model is PINNED for the session (persistent connection). The next
+# message in the same chat tries the SAME model first - no provider-hop loop,
+# no «در حال ارتباط با Kilo... → مدل دیگر...» churn. The pin falls back only
+# when the pinned model itself fails (rate-limit / refusal).
+_TLS = threading.local()
+SESS_LOCK = {}  # sid -> ("label:model", ts)
+SESS_LOCK_TTL = 20 * 60  # keep a conversation's connection warm for 20 min
+
+
+def _set_session(sid):
+    _TLS.sid = sid
+
+
+def _session():
+    return getattr(_TLS, "sid", None)
+
+
+def _lock_session(key):
+    sid = _session()
+    if sid and key:
+        SESS_LOCK[sid] = (key, time.time())
+        if len(SESS_LOCK) > 300:
+            now = time.time()
+            for k in [k for k, v in list(SESS_LOCK.items())
+                      if now - v[1] > SESS_LOCK_TTL]:
+                SESS_LOCK.pop(k, None)
+
+
+def _unlock_session():
+    sid = _session()
+    if sid:
+        SESS_LOCK.pop(sid, None)
+
+
+def _session_lock():
+    sid = _session()
+    if not sid:
+        return None
+    e = SESS_LOCK.get(sid)
+    if e and time.time() - e[1] < SESS_LOCK_TTL:
+        return e[0]
+    return None
+
 # ------------------------------------------------------- free LLM chain
 def _gemini(messages, timeout=8):
     key = os.environ.get("GEMINI_API_KEY")
@@ -186,12 +231,13 @@ def _mark(key, secs):
 
 def _try_completions(url, models, messages, timeout, max_tokens, label, skip=None, cb=None, headers=None):
     skip = skip or set()
+    if cb:
+        # ONE calm connect message per provider - never a hop loop.
+        cb(12, "برقراری ارتباط پایدار با موتور فکری...")
     for model in models:
         key = label + ":" + model
         if key in skip or _cool(key):
             continue
-        if cb:
-            cb(12, "در حال ارتباط با " + label + "...")
         body = {"model": model, "messages": messages, "temperature": 0.7,
                 "max_tokens": max_tokens, "stream": False}
         # NOTE: Qwen3.5-397B serves its output inside `reasoning` (content
@@ -234,14 +280,13 @@ def _try_completions(url, models, messages, timeout, max_tokens, label, skip=Non
                         out = _final_from_thinking(_clean(out))
                 if out:
                     PROV_STATE.pop(key, None)
+                    _lock_session(key)  # persistent per-session connection
                     if cb:
                         cb(64, "پاسخ " + label + " دریافت شد")
                     return out, label + " " + model + " (رایگان)"
             except Exception:
                 _mark(key, 12)
                 break
-        if cb:
-            cb(7, label + " مشغول است؛ مدل دیگر...")
     return None
 
 
@@ -331,6 +376,29 @@ def brain(messages, timeout=12, max_tokens=1200, skip=None, cb=None):
             if cb:
                 cb(64, "پاسخ دریافت شد")
             return r
+    # 0) PERSISTENT CONNECTION: if this session already pinned a provider+
+    #    model, reuse EXACTLY that one first - the same brain keeps answering
+    #    every question in the chat (no hop, no reconnect).
+    lock = _session_lock()
+    if lock and rem() > 5:
+        prov_name, _, model = lock.partition(":")
+        if cb:
+            cb(16, "ارتباط پایدار با " + (model or prov_name) + "...")
+        if prov_name == "OVH" and model:
+            r = _ovh_model(model, messages, timeout=min(16, rem() - 2),
+                           max_tokens=max_tokens, skip=skip, cb=cb)
+        elif prov_name == "Kilo" and model:
+            r = _try_completions(KILO_URL, [model], messages,
+                                 min(9, rem()), max_tokens, "Kilo", skip, cb)
+        else:
+            r = None
+        if r and r[0]:
+            if cb:
+                cb(58, "پاسخ از اتصال پایدار دریافت شد")
+            return r
+        # pinned model failed (rate-limit/refusal): drop the pin and fall
+        # through the normal chain - a fresh model answers instead of looping
+        _unlock_session()
     # 1) CONNECT-FIRST: the giant gets a dedicated solo attempt
     if PRIMARY_MODEL and rem() > 5:
         if cb:

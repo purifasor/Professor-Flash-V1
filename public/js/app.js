@@ -411,98 +411,78 @@ $("chatScroll").addEventListener("scroll", () => {
 });
 $("btnScrollDown").addEventListener("click", () => scrollDown(true));
 
-/* -------------------------------------- live answer box + morph loader
+/* -------------------------------------- live answer box: 3-layer pipeline
    The answer box is created the moment a message is sent and stays in the
-   chat. While the brain works it shows a REAL status line (driven by actual
-   server progress events - never a fake timer) under a morphing loader:
-   square → triangle → circle, with liquid filling the shape. When the answer
-   arrives the loader fades and the complete reply types itself into the SAME
-   box, finished with copy + download actions. No % counter, no locked square. */
-let live = null; // { wrap, bubble, status, buf, raf }
+   chat. THREE layers, all driven by REAL server progress events (never a
+   fake timer):
+     L1 CONNECT   - «برقراری ارتباط با موتور فکری» → «متصل» (persistent per
+                    session: once connected, later messages in the same chat
+                    show «متصل» immediately - the connection never restarts)
+     L2 PIPELINE  - خواندن پیام ← تبدیل و غنی‌سازی ← جستجو ← تحویل به مدل
+                    (each stage lights up as the brain really reaches it)
+     L3 RING      - a small filling ring (0→100, smooth, monotonic: it never
+                    jumps, never resets, never stops)
+   When the answer arrives the ring finishes to 100, everything fades and the
+   complete reply types itself into the SAME box. No % counter, no morph. */
+let live = null; // { wrap, bubble, status, conn, stages, ring, pctEl, buf, raf, target, cur }
 
-/* ---- morphing loader: square → triangle → circle, each 26 numbers ---- */
-const MORPH_KEYS = [
-  [30,30, 50,30, 70,30, 90,30, 90,50, 90,70, 90,90, 70,90, 50,90, 30,90, 30,70, 30,50, 30,30],          // square
-  [60,18, 78,44, 96,66, 98,84, 94,98, 32,98, 26,86, 22,72, 36,42, 52,26, 56,21, 58,19, 60,18],          // triangle
-  [60,16, 84.3,16, 104,35.7, 104,60, 104,84.3, 84.3,104, 60,104, 35.7,104, 16,84.3, 16,60, 16,35.7, 35.7,16, 60,16], // circle
-];
+const RING_C = 2 * Math.PI * 26; // ring circumference (r=26 in a 64 viewBox)
 
-function pathFromPts(n) {
-  return `M${n[0]},${n[1]} C${n[2]},${n[3]} ${n[4]},${n[5]} ${n[6]},${n[7]} `
-       + `C${n[8]},${n[9]} ${n[10]},${n[11]} ${n[12]},${n[13]} `
-       + `C${n[14]},${n[15]} ${n[16]},${n[17]} ${n[18]},${n[19]} `
-       + `C${n[20]},${n[21]} ${n[22]},${n[23]} ${n[24]},${n[25]} Z`;
-}
-
-function lerpPts(a, b, t) {
-  return a.map((v, i) => Math.round((v + (b[i] - v) * t) * 10) / 10);
-}
-
-function wavePath(level, t) {
-  const yBase = 118 - level * 112;
-  let d = `M-30,132 L-30,${yBase}`;
-  for (let x = -30; x <= 152; x += 12) {
-    d += ` L${x},${Math.round((yBase + Math.sin((x + t * 46) * 0.09) * 3.4) * 10) / 10}`;
-  }
-  return d + ` L152,132 Z`;
-}
-
-function morphLoaderHtml() {
-  return `<div class="morph-loader">
-    <svg class="morph-svg" viewBox="0 0 120 120" aria-hidden="true">
-      <defs>
-        <linearGradient id="morphGrad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#e0245e"/><stop offset="1" stop-color="#ff5e3a"/>
-        </linearGradient>
-        <clipPath id="morphClip"><path id="morphClipPath" d=""/></clipPath>
-      </defs>
-      <path id="morphShapePath" class="morph-shape" fill="rgba(224,36,94,.10)"
-            stroke="url(#morphGrad)" stroke-width="3" stroke-linejoin="round"/>
-      <g clip-path="url(#morphClip)">
-        <path id="morphWater" class="morph-water" fill="url(#morphGrad)" opacity=".55"/>
-      </g>
-    </svg>
+function pipeConnHtml(connected) {
+  return `<div class="pipe-conn${connected ? " on" : ""}">
+    <span class="conn-dot"></span>
+    <span class="conn-text">${connected ? "متصل — PRF" : "برقراری ارتباط با موتور فکری..."}</span>
   </div>`;
 }
 
-const MORPH_CYCLE = 2600; // ms per square→triangle→circle + fill cycle
-function startMorph() {
-  const wrap = live && live.wrap;
-  if (!wrap) return;
-  const shape = wrap.querySelector("#morphShapePath");
-  const clipShape = wrap.querySelector("#morphClipPath");
-  const water = wrap.querySelector("#morphWater");
-  if (!shape || !water) return;
-  let t0 = performance.now();
-  let raf = 0;
-  (function frame(now) {
-    if (!live || !document.getElementById(live.wrap.id)) return; // finalized
-    const el = (now - t0) % MORPH_CYCLE;
-    const shapeT = (el / (MORPH_CYCLE / 3)) % 3;
-    const k0 = Math.floor(shapeT) % 3;
-    const k1 = (k0 + 1) % 3;
-    const st = shapeT - Math.floor(shapeT);
-    const e = st < 0.5 ? 2 * st * st : 1 - Math.pow(-2 * st + 2, 2) / 2;
-    const d = pathFromPts(lerpPts(MORPH_KEYS[k0], MORPH_KEYS[k1], e));
-    shape.setAttribute("d", d);
-    clipShape.setAttribute("d", d);
-    water.setAttribute("d", wavePath(Math.min(1, (el / MORPH_CYCLE) * 1.5), now / 1000));
-    raf = requestAnimationFrame(frame);
-    live.raf = raf;
-  })(t0);
+const PIPE_STAGES = [
+  ["read", "خواندن پیام"],
+  ["enrich", "تبدیل و غنی‌سازی"],
+  ["search", "جستجو"],
+  ["deliver", "تحویل به مدل"],
+];
+
+function pipeStagesHtml() {
+  return `<div class="pipe-stages">` +
+    PIPE_STAGES.map(([k, label], i) =>
+      (i ? `<i class="pipe-arrow">←</i>` : "") +
+      `<span class="pipe-stage" data-k="${k}">${label}</span>`).join("") +
+    `</div>`;
 }
 
-function stopMorph() {
-  if (live && live.raf) { cancelAnimationFrame(live.raf); live.raf = 0; }
-  const l = live && live.wrap.querySelector(".morph-loader");
-  if (l) {
-    l.classList.add("done");
-    setTimeout(() => { if (l.parentNode) l.parentNode.removeChild(l); }, 420);
-  }
+function ringHtml() {
+  return `<div class="pipe-ring-wrap">
+    <svg class="pipe-ring" viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#e0245e"/><stop offset="1" stop-color="#ff5e3a"/>
+        </linearGradient>
+      </defs>
+      <circle class="ring-bg" cx="32" cy="32" r="26"/>
+      <circle class="ring-fg" cx="32" cy="32" r="26"/>
+    </svg>
+    <span class="ring-pct">۰٪</span>
+  </div>`;
+}
+
+/* persistent per-session connection: once a chat connects, later messages in
+   that same chat show «متصل» immediately (never reconnect / never hop) */
+function connKey() {
+  return "pf_conn_" + (state.sessionId || "");
+}
+function connSaved() {
+  try {
+    const c = JSON.parse(localStorage.getItem(connKey()) || "null");
+    return !!(c && Date.now() - c.ts < 20 * 60 * 1000);
+  } catch (e) { return false; }
+}
+function connSave() {
+  try { localStorage.setItem(connKey(), JSON.stringify({ ts: Date.now() })); } catch (e) {}
 }
 
 function ensureLiveBubble() {
   if (live && document.getElementById(live.wrap.id)) return live;
+  const warm = connSaved();
   const wrap = document.createElement("div");
   wrap.className = "msg bot";
   wrap.id = "liveMsg";
@@ -510,8 +490,10 @@ function ensureLiveBubble() {
   wrap.innerHTML = `
     ${avatarHtml("bot")}
     <div class="bubble live-bubble">
-      ${morphLoaderHtml()}
-      <span class="live-status">در حال برقراری ارتباط با موتور فکری...</span>
+      ${pipeConnHtml(warm)}
+      ${pipeStagesHtml()}
+      ${ringHtml()}
+      <span class="live-status">${warm ? "در حال پردازش پیام..." : "در حال برقراری ارتباط با موتور فکری..."}</span>
     </div>
     <div class="msg-side"></div>`;
   chatEl.appendChild(wrap);
@@ -519,24 +501,86 @@ function ensureLiveBubble() {
     wrap,
     bubble: wrap.querySelector(".bubble"),
     status: wrap.querySelector(".live-status"),
+    conn: wrap.querySelector(".pipe-conn"),
+    stages: wrap.querySelector(".pipe-stages"),
+    ring: wrap.querySelector(".ring-fg"),
+    pctEl: wrap.querySelector(".ring-pct"),
     buf: "",
     raf: 0,
+    target: warm ? 8 : 0,   // a warm connection starts already past zero
+    cur: warm ? 8 : 0,
+    connected: warm,
   };
-  startMorph();
+  live.ring.style.strokeDasharray = RING_C;
+  live.ring.style.strokeDashoffset = RING_C;
+  startRing();
   scrollDown();
   return live;
 }
 
-/* real server progress events drive the status line inside the answer box */
+/* smooth monotonic ring: cur eases toward target; target only ever moves
+   forward (real progress events), so the ring never jumps, resets or stops */
+function startRing() {
+  if (!live) return;
+  const step = () => {
+    if (!live || !document.getElementById(live.wrap.id)) return;
+    live.cur += (live.target - live.cur) * 0.09;
+    if (Math.abs(live.target - live.cur) < 0.2) live.cur = live.target;
+    const p = Math.max(0, Math.min(100, live.cur));
+    live.ring.style.strokeDashoffset = RING_C * (1 - p / 100);
+    live.pctEl.textContent = faDigits(Math.round(p)) + "٪";
+    live.raf = requestAnimationFrame(step);
+  };
+  live.raf = requestAnimationFrame(step);
+}
+
+function faDigits(n) {
+  return String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[+d]);
+}
+
+const STAGE_KEYWORDS = [
+  ["read", /تحلیل درخواست|خواندن|درک پرسش|درک/],
+  ["enrich", /تبدیل|غنی|بازنویسی|فشرده|تقویت دستور|ارسال/],
+  ["search", /جستجو|دانش|بانک|پارامتر|یادگرفت/],
+  ["deliver", /ارتباط پایدار|اتصال به موتور غول|اجرای موازی|استخر|تحویل|پاسخ|تأیید|نهایی|تلاش|انتظار/],
+];
+
+/* real server progress events drive all three layers */
 function setProgress(pct, phase) {
-  if (live && phase) live.status.textContent = phase;
+  if (!live) return;
+  // L1: the first real progress event (provider contact) confirms the
+  // connection -> mark it connected and persist it for this session
+  if (!live.connected && pct >= 12) {
+    live.connected = true;
+    connSave();
+    const c = live.conn;
+    if (c) {
+      c.classList.add("on");
+      c.querySelector(".conn-text").textContent = "متصل — PRF";
+    }
+  }
+  // L2: light the pipeline stage this phase belongs to (cumulative)
+  if (phase) {
+    live.status.textContent = phase;
+    live.stages.querySelectorAll(".pipe-stage").forEach((el) => {
+      const hit = STAGE_KEYWORDS.some(([key, re]) => key === el.dataset.k && re.test(phase));
+      if (hit) el.classList.add("on");
+    });
+  }
+  // L3: ring target only ever grows - never resets, never jumps back
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  if (p > live.target) live.target = p;
+}
+
+function stopRing() {
+  if (live && live.raf) { cancelAnimationFrame(live.raf); live.raf = 0; }
 }
 
 /* remove the live box ONLY when there is no answer to show (error / final
    busy). When an answer arrives it is finalized by showAnswer() instead. */
 function hideProgress(burst) {
   if (live) {
-    stopMorph();
+    stopRing();
     const w = live.wrap;
     live = null;
     if (w && w.parentNode) w.parentNode.removeChild(w);
@@ -545,9 +589,8 @@ function hideProgress(burst) {
 
 function startWaiting() {
   ensureLiveBubble();
-  setProgress(0, "در حال برقراری ارتباط با موتور فکری...");
+  if (!live.connected) setProgress(0, "در حال برقراری ارتباط با موتور فکری...");
 }
-
 /* reveal the full answer chunk-by-chunk into the live box, then finalize */
 function typeInto(bubble, finalText, onDone) {
   const chunks = String(finalText).match(/.{1,60}(\s|$)/gs) || [String(finalText)];
@@ -571,16 +614,29 @@ function showAnswer(reply) {
   if (live && document.getElementById(live.wrap.id)) {
     const bubble = live.bubble;
     const wrap = live.wrap;
-    stopMorph(); // loader fades away - the answer materializes in its place
-    bubble.classList.remove("live-bubble"); // back to a normal answer bubble
-    bubble.classList.add("typing");
-    bubble.innerHTML = '<span class="caret"></span>';
-    typeInto(bubble, reply, () => {
-      bubble.innerHTML = renderContent(reply);
-      wrap.dataset.raw = String(reply);
-      attachActions(wrap, "bot", reply, renderContent(reply));
-      live = null;
-    });
+    // L3: the ring finishes to 100, then the pipeline fades away and the
+    // complete reply types itself into the SAME box
+    live.target = 100;
+    setTimeout(() => {
+      if (!live || !document.getElementById(live.wrap.id)) return;
+      stopRing();
+      wrap.querySelectorAll(".pipe-conn, .pipe-stages, .pipe-ring-wrap")
+          .forEach((el) => el.classList.add("fade"));
+      setTimeout(() => {
+        if (!wrap.parentNode) return;
+        wrap.querySelectorAll(".pipe-conn, .pipe-stages, .pipe-ring-wrap")
+            .forEach((el) => el.parentNode && el.parentNode.removeChild(el));
+        bubble.classList.remove("live-bubble"); // back to a normal answer bubble
+        bubble.classList.add("typing");
+        bubble.innerHTML = '<span class="caret"></span>';
+        typeInto(bubble, reply, () => {
+          bubble.innerHTML = renderContent(reply);
+          wrap.dataset.raw = String(reply);
+          attachActions(wrap, "bot", reply, renderContent(reply));
+          live = null;
+        });
+      }, 380);
+    }, 420);
   } else {
     addMessage("assistant", reply, null);
   }
