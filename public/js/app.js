@@ -282,6 +282,7 @@ window.PFApp = (() => {
     const typingEl = msgEl.querySelector(".typing");
     let raw = "";
     let gotFirst = false;
+    let gotDone = false;
     let renderTimer = null;
     let ingestTimer = null;
 
@@ -358,6 +359,7 @@ window.PFApp = (() => {
             scheduleRender();
             scheduleIngest();
           } else if (d.type === "done") {
+            gotDone = true;
             aiMsg.model = d.model ? `${d.provider || ""} · ${d.model}` : null;
             if (d.search) aiMsg.search = d.search;
           } else if (d.type === "error") {
@@ -404,6 +406,23 @@ window.PFApp = (() => {
       msgEl.querySelector(".msg-content").appendChild(box);
     } else {
       msgEl.querySelector(".msg-content").innerHTML = PFMD.render(raw, { fileRenderer: fileChip });
+      if (!gotDone) {
+        // connection dropped before completion — offer a resume/retry hint
+        const note = document.createElement("div");
+        note.className = "err-box";
+        note.style.marginTop = "10px";
+        note.innerHTML = `<span>⚠ اتصال قبل از پایان کامل پاسخ قطع شد.</span>`;
+        const again = document.createElement("button");
+        again.textContent = "تلاش دوباره";
+        again.addEventListener("click", () => {
+          const s2 = current();
+          if (s2) { s2.messages.pop(); saveSessions(); }
+          msgEl.remove();
+          send(text, { errors });
+        });
+        note.appendChild(again);
+        msgEl.querySelector(".msg-content").appendChild(note);
+      }
       if (aiMsg.model) {
         const meta = msgEl.querySelector(".msg-meta");
         meta.insertAdjacentHTML("beforeend", `<span class="model-chip">${PFMD.esc(shortModel(aiMsg.model))}</span>`);
