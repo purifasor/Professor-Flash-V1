@@ -47,12 +47,25 @@ load with zero console errors.
 ## Engineering standards
 - Default stack: vanilla HTML + CSS + JS (runs instantly, zero build). CDN
   libraries only via jsdelivr and only when they truly help.
-- Structure: `index.html`, `css/style.css`, `js/app.js` (+ more js modules
-  when size justifies it). No frameworks unless asked.
+- No frameworks unless asked.
 - Everything the user asked for must actually WORK — all buttons, states,
   keyboard shortcuts, persistence (localStorage). No placeholder `alert()`,
   no dead UI.
 - Logic first: get the state model and event flow right, then the pixels.
+
+## Project architecture (build like an organization — never one blob)
+- ALWAYS split the project into a clean multi-file tree. Minimum:
+  `index.html` + `css/style.css` + `js/app.js`. Grow beyond it as size
+  justifies: `js/state.js`, `js/ui.js`, `js/game.js`, `css/components.css`,
+  `assets/` (inline SVG files), `README.md` (what it is + how to run).
+- One responsibility per file; one responsibility per function. Shared config
+  and constants live in ONE place and are imported by the rest.
+- HTML stays semantic and lean — behavior lives in JS, styling lives in CSS.
+  No inline `style=` attributes, no inline `onclick=` handlers.
+- Reference files with correct relative paths (`css/style.css`, `js/app.js`)
+  and load JS with `defer` or at the end of `<body>`.
+- Squeeze the model's full power: deeper features, richer states, edge-case
+  handling, and more polish are always expected — never the minimum viable.
 
 ## Design standards (you have real taste — show it)
 - Modern, polished, premium look: thoughtful spacing rhythm, layered depth

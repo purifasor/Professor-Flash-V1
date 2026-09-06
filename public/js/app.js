@@ -1,9 +1,12 @@
-// Professor Flash — main app: chat streaming, sessions, agent integration.
+// Professor Flash — main app: chat streaming, sessions, sidebar, agent integration.
+// Stability rules: messages are appended incrementally (never rebuilt mid-session),
+// so entry animations, avatars and the logo never restart or flicker.
 window.PFApp = (() => {
   const $ = (id) => document.getElementById(id);
 
   /* ============================ state ============================ */
   const LS_KEY = "professor-flash.v3.sessions";
+  const LS_SIDE = "professor-flash.side";
   let sessions = loadSessions();
   let currentId = null;
   let mode = "chat";
@@ -22,6 +25,7 @@ window.PFApp = (() => {
     }, 250);
   }
   const current = () => sessions.find((s) => s.id === currentId) || null;
+  const isMobile = () => window.matchMedia("(max-width: 1023px)").matches;
 
   /* ============================ ui helpers ============================ */
   function toast(msg, ms = 2600) {
@@ -42,7 +46,7 @@ window.PFApp = (() => {
     streaming = on;
     $("btnSend").hidden = on;
     $("btnStop").hidden = !on;
-    $("input").disabled = false;
+    $("messages").classList.toggle("stream-lock", on);
     updateSendBtn();
   }
 
@@ -51,11 +55,11 @@ window.PFApp = (() => {
   }
 
   /* ============================ sessions ============================ */
-  function newSession({ switchMode = null, keepMode = true } = {}) {
+  function newSession() {
     const s = {
       id: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: "گفتگوی جدید",
-      mode: keepMode ? mode : (switchMode || mode),
+      mode,
       created: Date.now(),
       messages: [],
       files: [],
@@ -75,7 +79,7 @@ window.PFApp = (() => {
   }
 
   function switchSession(id) {
-    if (streaming) return;
+    if (streaming || id === currentId) { closeSideMobile(); return; }
     currentId = id;
     const s = current();
     if (s) {
@@ -83,7 +87,7 @@ window.PFApp = (() => {
       renderMessages();
       PFAgent.setFiles(s.files || []);
     }
-    closeDrawer();
+    closeSideMobile();
     renderSessionList();
   }
 
@@ -92,8 +96,16 @@ window.PFApp = (() => {
     sessions = sessions.filter((s) => s.id !== id);
     if (currentId === id) {
       currentId = null;
-      if (sessions.length) switchSession(sessions[0].id);
-      else newSession();
+      if (sessions.length) {
+        const nxt = sessions[0];
+        currentId = nxt.id;
+        setMode(nxt.mode || "chat", { soft: true });
+        renderMessages();
+        PFAgent.setFiles(nxt.files || []);
+      } else {
+        newSession();
+        return;
+      }
     }
     saveSessions();
     renderSessionList();
@@ -102,7 +114,7 @@ window.PFApp = (() => {
   function renderSessionList() {
     const box = $("sessionList");
     if (!sessions.length) {
-      box.innerHTML = '<div class="drawer-empty">هنوز گفتگویی نداری.</div>';
+      box.innerHTML = '<div class="side-empty">هنوز گفتگویی نداری.</div>';
       return;
     }
     box.innerHTML = "";
@@ -110,7 +122,7 @@ window.PFApp = (() => {
       const b = document.createElement("button");
       b.className = "session-item" + (s.id === currentId ? " active" : "");
       b.innerHTML =
-        `<span>${s.mode === "agent" ? "🤖" : "💬"}</span>` +
+        `<span class="si-ico">${s.mode === "agent" ? "⚡" : "💬"}</span>` +
         `<span class="si-title">${PFMD.esc(s.title)}</span>` +
         `<span class="si-del" title="حذف">✕</span>`;
       b.addEventListener("click", () => switchSession(s.id));
@@ -122,6 +134,22 @@ window.PFApp = (() => {
   /* ============================ messages render ============================ */
   function fileChip(path) {
     return `<button class="file-chip" data-file="${PFMD.esc(path)}" title="باز کردن در کارگاه">📄 ${PFMD.esc(path)}</button>`;
+  }
+
+  // In chat mode there is no workbench: ```file: blocks become inline code.
+  const EXT_LANG = { html: "html", css: "css", js: "javascript", json: "json", md: "markdown", svg: "xml", txt: "text", py: "python" };
+  function chatifyFileBlocks(text) {
+    return String(text).replace(/```file:([^\n`]+)\n([\s\S]*?)(?:```|$)/g, (_m, p, body) => {
+      const ext = (p.trim().split(".").pop() || "").toLowerCase();
+      const lang = EXT_LANG[ext] || "text";
+      return `\`\`\`${lang}\n// ${p.trim()}\n${body}\`\`\``;
+    });
+  }
+
+  function renderContent(text, forMode) {
+    return forMode === "agent"
+      ? PFMD.render(text, { fileRenderer: fileChip })
+      : PFMD.render(chatifyFileBlocks(text));
   }
 
   function renderMessages() {
@@ -152,8 +180,6 @@ window.PFApp = (() => {
         const prompt = btn.dataset.prompt;
         if (btn.dataset.mode) setMode(btn.dataset.mode);
         if (btn.dataset.search) setSearch(true);
-        $("input").value = prompt;
-        updateSendBtn();
         send(prompt);
       });
     });
@@ -165,9 +191,8 @@ window.PFApp = (() => {
     const avatar = m.role === "user" ? "👤" : "⚡";
     const role = m.role === "user" ? "شما" : "پروفسور فلش";
     const modelChip = m.model ? `<span class="model-chip">${PFMD.esc(shortModel(m.model))}</span>` : "";
-    const contentHtml = m.role === "user"
-      ? PFMD.esc(m.content)
-      : PFMD.render(m.content, { fileRenderer: fileChip });
+    const msgMode = m.mode || mode;
+    const contentHtml = m.role === "user" ? PFMD.esc(m.content) : renderContent(m.content, msgMode);
     const srcBox = m.search?.results?.length
       ? `<div class="src-box">${m.search.results
           .slice(0, 4)
@@ -195,10 +220,7 @@ window.PFApp = (() => {
     wrap.querySelectorAll(".file-chip").forEach((b) =>
       b.addEventListener("click", () => {
         PFAgent.openMobile();
-        const path = b.dataset.file;
-        const item = [...document.querySelectorAll(".tree-item")].find((t) => t.dataset.path === path);
-        if (item) item.click();
-        else PFAgent.switchTab("files");
+        PFAgent.openFile(b.dataset.file) || PFAgent.switchTab("files");
       })
     );
   }
@@ -207,33 +229,38 @@ window.PFApp = (() => {
     return String(id || "").split("/").pop().replace(/:free$/, "");
   }
 
+  // Remove the hero exactly once (no re-render, no animation restart).
+  function dropHero() {
+    const h = $("messages").querySelector(".hero");
+    if (h) h.remove();
+  }
+
   /* ============================ mode & search ============================ */
   function setMode(next, { soft = false } = {}) {
     mode = next === "agent" ? "agent" : "chat";
     $("app").dataset.mode = mode;
+    $("modeSwitch").dataset.active = mode;
     $("btnModeChat").classList.toggle("active", mode === "chat");
     $("btnModeAgent").classList.toggle("active", mode === "agent");
-    $("btnModeChat").setAttribute("aria-selected", mode === "chat");
-    $("btnModeAgent").setAttribute("aria-selected", mode === "agent");
+    $("btnModeChat").setAttribute("aria-selected", String(mode === "chat"));
+    $("btnModeAgent").setAttribute("aria-selected", String(mode === "agent"));
     $("bench").hidden = mode !== "agent";
     $("benchFab").hidden = mode !== "agent";
     $("btnSearch").style.display = mode === "chat" ? "" : "none";
     $("input").placeholder = mode === "agent"
-      ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی مار با تم فیروزه‌ای بساز)"
+      ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی مار با تم نئون قرمز بساز)"
       : "پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)";
-    // slide the mode thumb (RTL: chat button first/right, agent slides left)
-    const btn = mode === "chat" ? $("btnModeChat") : $("btnModeAgent");
-    const thumb = $("modeThumb");
-    const chatW = $("btnModeChat").offsetWidth;
-    thumb.style.width = btn.offsetWidth + "px";
-    thumb.style.transform = mode === "chat" ? "translateX(0)" : `translateX(${-chatW}px)`;
+    $("composerHint").innerHTML = mode === "agent"
+      ? "عامل کدنویس: پروژهٔ <b>چندفایلی</b> سازمان‌یافته + اجرای زنده در کارگاه + دانلود ZIP"
+      : "مدل‌های قوی و رایگان · پاسخ تازه، نه آماده · <b>مغز متصل به گیت‌هاب</b>";
     if (!soft) {
       const s = current();
       if (s && s.messages.length && s.mode !== mode) {
-        newSession({ keepMode: true });
+        newSession();
       } else if (s) {
         s.mode = mode;
         saveSessions();
+        renderSessionList();
       }
     }
   }
@@ -244,34 +271,51 @@ window.PFApp = (() => {
     toast(searchOn ? "جستجوی وب فعال شد 🌐" : "جستجوی وب خاموش شد");
   }
 
-  /* ============================ drawer ============================ */
-  function openDrawer() {
-    renderSessionList();
-    $("drawer").classList.add("open");
-    $("drawerBackdrop").classList.add("show");
+  /* ============================ sidebar ============================ */
+  function openSide() {
+    $("app").dataset.side = "open";
+    if (isMobile()) $("sideBackdrop").classList.add("show");
+    else try { localStorage.setItem(LS_SIDE, "open"); } catch { /* noop */ }
   }
-  function closeDrawer() {
-    $("drawer").classList.remove("open");
-    $("drawerBackdrop").classList.remove("show");
+  function closeSide() {
+    $("app").dataset.side = "closed";
+    $("sideBackdrop").classList.remove("show");
+    if (!isMobile()) try { localStorage.setItem(LS_SIDE, "closed"); } catch { /* noop */ }
+  }
+  function toggleSide() {
+    $("app").dataset.side === "open" ? closeSide() : openSide();
+  }
+  function closeSideMobile() {
+    if (isMobile()) closeSide();
   }
 
   /* ============================ sending / streaming ============================ */
-  async function send(text, { errors = null } = {}) {
+  async function send(text, { errors = null, reuseLastUser = false } = {}) {
     text = String(text || "").trim();
     if (!text || streaming) return;
     const s = ensureSession();
 
-    if (s.messages.length === 0) s.title = text.slice(0, 46);
-    s.mode = mode;
-    s.messages.push({ role: "user", content: text });
-    saveSessions();
-    renderMessages();
+    // retry path: the user bubble is already on screen and in history
+    const skipUser =
+      reuseLastUser && s.messages.length && s.messages[s.messages.length - 1].role === "user";
 
-    // assistant placeholder
-    const aiMsg = { role: "assistant", content: "", model: null, _live: true };
+    if (!skipUser) {
+      if (s.messages.length === 0) s.title = text.slice(0, 46);
+      s.mode = mode;
+      const userMsg = { role: "user", content: text };
+      s.messages.push(userMsg);
+
+      // incremental DOM: hero out, user message in — nothing else is touched
+      dropHero();
+      $("messages").appendChild(buildMsg(userMsg));
+    }
+
+    const aiMsg = { role: "assistant", content: "", model: null, mode, _live: true };
     s.messages.push(aiMsg);
     const msgEl = buildStreamingMsg();
     $("messages").appendChild(msgEl);
+    saveSessions();
+    renderSessionList();
     scrollBottom(true);
 
     setStreaming(true);
@@ -290,7 +334,7 @@ window.PFApp = (() => {
       if (renderTimer) return;
       renderTimer = setTimeout(() => {
         renderTimer = null;
-        contentEl.innerHTML = PFMD.render(raw, { fileRenderer: fileChip });
+        contentEl.innerHTML = renderContent(raw, mode);
         wireMsg(msgEl);
         scrollBottom();
       }, 140);
@@ -390,7 +434,7 @@ window.PFApp = (() => {
     saveSessions();
 
     if (aiMsg._error && !raw) {
-      msgEl.querySelector(".msg-content").innerHTML = "";
+      contentEl.innerHTML = "";
       const box = document.createElement("div");
       box.className = "err-box";
       box.innerHTML = `<span>⚠ ${PFMD.esc(aiMsg._error)}</span>`;
@@ -400,14 +444,14 @@ window.PFApp = (() => {
         const s2 = current();
         if (s2) { s2.messages.pop(); saveSessions(); }
         msgEl.remove();
-        send(text, { errors });
+        send(text, { errors, reuseLastUser: true });
       });
       box.appendChild(retry);
-      msgEl.querySelector(".msg-content").appendChild(box);
+      contentEl.appendChild(box);
     } else {
-      msgEl.querySelector(".msg-content").innerHTML = PFMD.render(raw, { fileRenderer: fileChip });
+      contentEl.innerHTML = renderContent(raw, mode);
       if (!gotDone) {
-        // connection dropped before completion — offer a resume/retry hint
+        // connection dropped before completion — offer a retry hint
         const note = document.createElement("div");
         note.className = "err-box";
         note.style.marginTop = "10px";
@@ -418,10 +462,10 @@ window.PFApp = (() => {
           const s2 = current();
           if (s2) { s2.messages.pop(); saveSessions(); }
           msgEl.remove();
-          send(text, { errors });
+          send(text, { errors, reuseLastUser: true });
         });
         note.appendChild(again);
-        msgEl.querySelector(".msg-content").appendChild(note);
+        contentEl.appendChild(note);
       }
       if (aiMsg.model) {
         const meta = msgEl.querySelector(".msg-meta");
@@ -466,16 +510,21 @@ window.PFApp = (() => {
 
   /* ============================ init ============================ */
   function init() {
-    // move hero template out (kept as string for re-use)
+    // capture hero template once, then clear (rendered via buildHero)
     $("messages").innerHTML = "";
 
     $("btnModeChat").addEventListener("click", () => setMode("chat"));
     $("btnModeAgent").addEventListener("click", () => setMode("agent"));
     $("btnSearch").addEventListener("click", () => setSearch(!searchOn));
-    $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeDrawer(); } });
-    $("btnSessions").addEventListener("click", openDrawer);
-    $("btnCloseDrawer").addEventListener("click", closeDrawer);
-    $("drawerBackdrop").addEventListener("click", closeDrawer);
+    $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeSideMobile(); } });
+    $("btnOpenSide").addEventListener("click", openSide);
+    $("btnCloseSide").addEventListener("click", closeSide);
+    $("btnToggleSide").addEventListener("click", toggleSide);
+    $("sideBackdrop").addEventListener("click", closeSide);
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && isMobile() && $("app").dataset.side === "open") closeSide();
+    });
 
     const input = $("input");
     input.addEventListener("input", () => {
@@ -505,6 +554,15 @@ window.PFApp = (() => {
     wirePromptButtons(document);
     wireAgent();
 
+    // sidebar: desktop remembers preference; mobile starts closed
+    if (isMobile()) {
+      $("app").dataset.side = "closed";
+    } else {
+      let pref = "open";
+      try { pref = localStorage.getItem(LS_SIDE) || "open"; } catch { /* noop */ }
+      $("app").dataset.side = pref;
+    }
+
     // restore last session or start fresh
     if (sessions.length) {
       currentId = sessions[0].id;
@@ -514,10 +572,8 @@ window.PFApp = (() => {
       PFAgent.setFiles(s.files || []);
     } else {
       newSession();
-      setMode("chat", { soft: true });
-      renderMessages();
     }
-    setMode(mode, { soft: true });
+    renderSessionList();
     input.focus();
   }
 
