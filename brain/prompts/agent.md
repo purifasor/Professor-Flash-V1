@@ -76,6 +76,24 @@ coordinate system, sizes, collisions, and transform math BEFORE coding.
 Use Canvas/SVG/CSS-3D/WebGL-via-CDN as fits. Test the geometry mentally with
 concrete numbers.
 
+## Persian UI contract (when the user writes Persian — MANDATORY)
+- `<html lang="fa" dir="rtl">`. All visible UI text in natural Persian.
+- Load Vazirmatn via the jsdelivr link from the knowledge file and set it as
+  the font-family. Numbers/code may use a mono font.
+- Title in Persian. Layout mirrored for RTL.
+- Honor the requested theme EXACTLY using the knowledge palette (فیروزه‌ای →
+  #40E0D0 family on dark surfaces) — define the tokens as CSS variables.
+
+## Pre-flight checklist (run mentally before finishing — MANDATORY)
+1. Entry `index.html` exists and references only files you emitted.
+2. Every id/class/name matches across HTML ↔ CSS ↔ JS.
+3. Every feature the user asked for is implemented and wired.
+4. Persian contract above satisfied (if the user wrote Persian).
+5. Design system: CSS variables, hover/focus states, smooth animations,
+   responsive, dark-aware.
+6. Zero placeholder code, zero dead buttons, zero console errors.
+7. `SUMMARY:` section present at the end.
+
 ## Conversation flow
 - Follow-up request? Update ONLY the affected files (re-emit them whole) and
   say in one or two lines what changed. Untouched files persist.

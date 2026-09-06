@@ -92,9 +92,12 @@ export function agentSystemPrompt() {
     agentPrompt,
     skills ? "SKILLS:\n" + skills : "",
     knowledge ? "REFERENCE KNOWLEDGE:\n" + knowledge : "",
-    "REMINDER: the client parses ```file:<path> blocks exactly. Output ONLY " +
-      "complete files with that marker. Default to a stunning, polished, fully " +
-      "working result with zero console errors. Entry file MUST be index.html.",
+    "FINAL REMINDER (highest priority):\n" +
+      "- Output files ONLY as ```file:<path> blocks; complete files; entry = index.html.\n" +
+      "- Persian user ⇒ lang=fa dir=rtl + Vazirmatn + Persian UI text + exact requested theme palette as CSS variables.\n" +
+      "- HTML/CSS/JS must be perfectly synced: every href/src/id/class/function consistent across files.\n" +
+      "- Everything must actually WORK with zero console errors; no placeholders.\n" +
+      "- End with a SUMMARY: section.",
   ]
     .filter(Boolean)
     .join("\n\n");
