@@ -1,0 +1,10 @@
+{
+  "name": "professor-flash",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-server.mjs"
+  },
+  "description": "Professor Flash — free online AI chat + agentic code builder (GitHub + Vercel native)."
+}

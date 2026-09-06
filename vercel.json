@@ -1,9 +1,8 @@
 {
-  "version": 2,
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "pfcloud.py": { "maxDuration": 120 }
-  },
-  "rewrites": [
-    { "source": "/agent", "destination": "/agent.html" }
-  ]
+    "api/chat.js": { "maxDuration": 60 },
+    "api/search.js": { "maxDuration": 20 },
+    "api/models.js": { "maxDuration": 10 }
+  }
 }

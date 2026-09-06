@@ -2,105 +2,162 @@
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Professor Flash V1 - چت</title>
-<link rel="icon" type="image/png" href="/img/logo-64.png">
-<link rel="stylesheet" href="/css/style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>پروفسور فلش — هوش مصنوعی و عامل کدنویس</title>
+<meta name="description" content="هوش مصنوعی رایگان و آنلاین: چت هوشمند با جستجوی وب و عامل کدنویس چندفایلی با پیش‌نمایش زنده و دانلود ZIP.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2340E0D0'/%3E%3Cstop offset='1' stop-color='%230D9488'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%230B1220'/%3E%3Cpath d='M36 6 L16 36 h12 L28 58 L48 26 h-13 z' fill='url(%23g)'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+<link rel="stylesheet" href="/css/styles.css">
 </head>
-<body data-page="chat">
+<body>
 
-<div class="app">
+<div class="app" id="app">
 
-  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
-
-  <!-- ============ sidebar: history ============ -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-head">
-      <button class="btn btn-ghost new-session" id="btnNewSession" title="گفتگوی جدید">
-        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <span>گفتگوی جدید</span>
-      </button>
+  <!-- ======================= icon rail ======================= -->
+  <nav class="rail" aria-label="نوار ابزار">
+    <div class="rail-logo" title="پروفسور فلش">
+      <svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#40E0D0"/><stop offset="1" stop-color="#0D9488"/>
+        </linearGradient></defs>
+        <path d="M36 6 L16 36 h12 L28 58 L48 26 h-13 z" fill="url(#lg)"/>
+      </svg>
     </div>
-    <div class="sessions" id="sessions"></div>
-    <div class="sidebar-foot">
-      <div class="brain-badge" id="brainBadge">
-        <span class="dot" id="brainDot"></span>
-        <span id="brainText">در حال اتصال...</span>
-      </div>
+
+    <button class="rail-btn active" id="btnModeChat" data-mode="chat" title="چت هوشمند">
+      <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      <span>چت</span>
+    </button>
+
+    <button class="rail-btn" id="btnModeAgent" data-mode="agent" title="عامل کدنویس — ساخت برنامه چندفایلی با پیش‌نمایش">
+      <svg viewBox="0 0 24 24"><path d="M8 6 L3 12 l5 6 M16 6 l5 6 -5 6 M13 4 l-2 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>عامل</span>
+    </button>
+
+    <div class="rail-spacer"></div>
+
+    <button class="rail-btn" id="btnSessions" title="گفتگوها">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>تاریخچه</span>
+    </button>
+
+    <button class="rail-btn" id="btnNew" title="گفتگوی جدید">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>جدید</span>
+    </button>
+  </nav>
+
+  <!-- ======================= sessions drawer ======================= -->
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2>گفتگوها</h2>
+      <button class="icon-btn" id="btnCloseDrawer" aria-label="بستن">✕</button>
     </div>
+    <div class="drawer-list" id="sessionList"></div>
   </aside>
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
 
-  <!-- ============ main: chat ============ -->
+  <!-- ======================= main ======================= -->
   <main class="main">
-    <header class="topbar">
-      <div class="topbar-start">
-      <button class="btn btn-ghost burger" id="btnBurger" title="باز و بسته کردن هیستوری" aria-label="منو">
-        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      </button>
-      <div class="brand" id="brandBlock">
-        <div class="logo"><img src="/img/logo-128.png" alt="Professor Flash"></div>
-        <div>
-          <div class="brand-name">Professor Flash <span class="version">V1</span></div>
-          <div class="brand-sub" id="brandSub">PRF - فکر می‌کند، جواب می‌دهد</div>
+
+    <!-- chat column -->
+    <section class="chat-col" id="chatCol">
+      <header class="chat-head">
+        <div class="chat-title">
+          <strong id="chatTitle">گفتگوی جدید</strong>
+          <span class="engine-chip" id="engineChip" hidden></span>
+        </div>
+        <div class="chat-actions">
+          <button class="chip-btn" id="btnSearch" title="جستجوی زنده در وب" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3 12h18M12 3c3 3.5 3 14 0 18M12 3c-3 3.5-3 14 0 18" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+            جستجوی وب
+          </button>
+          <button class="chip-btn" id="btnClear" title="پاک کردن گفتگو">پاکسازی</button>
+        </div>
+      </header>
+
+      <div class="messages" id="messages">
+        <!-- welcome hero -->
+        <div class="hero" id="hero">
+          <div class="hero-orb"></div>
+          <h1>پروفسور فلش</h1>
+          <p>هوش مصنوعی رایگان، زنده و آنلاین — با مغز متصل به گیت‌هاب و موتورهای قدرتمند.</p>
+          <div class="hero-cards">
+            <button class="hero-card" data-try="chat" data-prompt="تم فیروزه‌ای چیست؟ پالت رنگی کاملش را با کد رنگ‌ها بهم بده و بگو با چه رنگ‌هایی ترکیب می‌شود.">
+              <span class="hc-ico">💬</span>
+              <span class="hc-t">چت هوشمند</span>
+              <span class="hc-d">پاسخ‌های تازه، استدلال‌شده و دقیق — نه متن آماده</span>
+            </button>
+            <button class="hero-card" data-try="agent" data-prompt="یک ماشین‌حساب زیبا با تم فیروزه‌ای بساز؛ با دکمه‌های شیشه‌ای، تاریخچه محاسبات و پشتیبانی از کیبورد.">
+              <span class="hc-ico">🤖</span>
+              <span class="hc-t">عامل کدنویس</span>
+              <span class="hc-d">ساخت برنامه‌های چندفایلی + پیش‌نمایش زنده + دانلود ZIP</span>
+            </button>
+            <button class="hero-card" data-try="search" data-prompt="آخرین نسخه پایدار Node.js چیست و چه ویژگی‌هایی دارد؟">
+              <span class="hc-ico">🌐</span>
+              <span class="hc-t">جستجوی وب</span>
+              <span class="hc-d">دانش زنده از اینترنت برای سؤال‌های به‌روز</span>
+            </button>
+          </div>
         </div>
       </div>
-      </div>
-      <div class="topbar-info">
-        <div class="chip" id="learnedChip" title="دانش ذخیره‌شده در پوشه Learned">یادگیری: ۰</div>
-      </div>
-    </header>
 
-    <div class="chat-scroll" id="chatScroll">
-      <div class="chat" id="chat"></div>
+      <footer class="composer-wrap">
+        <div class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)"></textarea>
+          <button class="send-btn" id="btnSend" title="ارسال" disabled>
+            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M22 2 L11 13 M22 2 l-7 20 -4-9 -9-4 z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="send-btn stop" id="btnStop" title="توقف" hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="composer-hint" id="composerHint">موتورها: OVHcloud AI · Kilo · Pollinations — رایگان، بدون نصب، بدون ثبت‌نام</div>
+      </footer>
+    </section>
 
-      <!-- hero / empty state -->
-      <div class="hero" id="hero">
-        <div class="hero-logo"><img src="/img/logo-256.png" alt="Professor Flash"></div>
-        <h1 class="hero-title">Professor Flash V1</h1>
-        <p class="hero-sub">هر پیامی را می‌فهمد، فکر می‌کند و پاسخ واقعی می‌سازد - بدون ساخت فایل.</p>
+    <!-- workbench column (agent mode) -->
+    <section class="bench" id="bench" hidden>
+      <div class="bench-tabs">
+        <button class="bench-tab" data-tab="files" id="tabFiles">📁 فایل‌ها <span class="file-count" id="fileCount">0</span></button>
+        <button class="bench-tab active" data-tab="preview" id="tabPreview">👁 پیش‌نمایش زنده</button>
+        <div class="bench-spacer"></div>
+        <button class="chip-btn" id="btnRefreshPreview" title="تازه‌سازی پیش‌نمایش">↻</button>
+        <button class="chip-btn accent" id="btnZip" title="دانلود همه فایل‌ها به صورت ZIP" disabled>⬇ ZIP</button>
       </div>
-    </div>
 
-    <!-- composer -->
-    <div class="composer-wrap">
-      <div class="composer-rail">
-        <button class="scroll-down" id="btnScrollDown" hidden title="برو به آخرین پیام">
-          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          برو به آخر
-        </button>
+      <div class="bench-body">
+        <div class="bench-pane" id="paneFiles" hidden>
+          <div class="file-tree" id="fileTree"></div>
+          <div class="file-view" id="fileView">
+            <div class="file-view-head">
+              <span id="fileViewName">فایلی انتخاب نشده</span>
+              <button class="chip-btn" id="btnCopyFile" hidden>کپی</button>
+            </div>
+            <pre class="file-code"><code id="fileViewCode">روی یک فایل بزن تا محتواش را ببینی.</code></pre>
+          </div>
+        </div>
+        <div class="bench-pane active" id="panePreview">
+          <div class="preview-empty" id="previewEmpty">
+            <div class="pe-orb"></div>
+            <p>هنوز چیزی ساخته نشده.<br>در حالت «عامل» بگو چه برنامه‌ای می‌خواهی — مثلاً:<br><em>«یک بازی مار با تم فیروزه‌ای بساز»</em></p>
+          </div>
+          <iframe id="previewFrame" title="پیش‌نمایش" sandbox="allow-scripts allow-modals" hidden></iframe>
+        </div>
       </div>
-      <div class="controls" id="controls" hidden>
-        <button class="btn ctrl" id="btnPause" title="توقف موقت">
-          <svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-          <span>توقف موقت</span>
-        </button>
-        <button class="btn ctrl" id="btnResume" title="ادامه">
-          <svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z" fill="currentColor"/></svg>
-          <span>ادامه</span>
-        </button>
-        <button class="btn ctrl danger" id="btnStop" title="توقف کامل">
-          <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>
-          <span>توقف کامل</span>
-        </button>
-        <span class="task-state" id="taskState"></span>
-      </div>
-      <div class="composer">
-        <textarea id="input" rows="1" placeholder="بنویس: سوال، درخواست کد، یا محاسبه... (Shift+Enter برای خط جدید)" dir="auto"></textarea>
-        <button class="btn send" id="btnSend" title="ارسال">
-          <svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-7-8-3z" fill="currentColor"/></svg>
-        </button>
-      </div>
-    </div>
+    </section>
   </main>
-
-  <!-- page switch: outside the chat area, bottom-left; Agent disabled for now -->
-  <div class="page-switch" id="pageSwitch">
-    <a class="ps-item active" href="/">چت</a>
-    <span class="ps-item disabled" id="psAgent" title="به‌زودی">Agent</span>
-  </div>
-
 </div>
 
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="/js/markdown.js"></script>
+<script src="/js/agent.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

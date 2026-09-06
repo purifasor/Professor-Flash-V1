@@ -1,45 +1,54 @@
 {
-  "model": "Professor Flash V1",
-  "brain": "PRF",
-  "unrestricted": true,
-  "premium_env_keys": ["GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
-  "primary": ["Qwen3.5-397B-A17B"],
-  "anonymous": [
+  "$comment": "Roster of free, keyless model providers. The backend (api/_lib/providers.js) reads this file live; edit here and push to re-tune the brain. Order = preference.",
+  "providers": [
     {
-      "provider": "OVH",
+      "id": "ovh",
+      "label": "OVHcloud AI",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
-      "models": ["Qwen3.5-397B-A17B", "gpt-oss-120b", "Meta-Llama-3_3-70B-Instruct"],
-      "sizes": {
-        "Qwen3.5-397B-A17B": "397B",
-        "gpt-oss-120b": "120B",
-        "Meta-Llama-3_3-70B-Instruct": "70B"
-      },
-      "primary": ["Qwen3.5-397B-A17B"],
-      "free": true,
-      "key": null,
-      "rate": "~2 rpm shared",
-      "note": "Qwen3.5-397B (397B) is the ONLY free anonymous model above 300B reachable today. The 120B/70B stay only as availability fallbacks so a rate-limited giant never becomes a «مشغول‌اند» dead-end."
-    }
-  ],
-  "emergency": [
-    {
-      "provider": "Kilo",
-      "url": "https://api.kilo.ai/api/gateway/chat/completions",
-      "models": ["openrouter/free", "kilo-auto/free"],
-      "free": true,
-      "key": null,
-      "rate": "~200 req/hr",
-      "note": "emergency pool - only used when every OVH model is busy"
+      "type": "openai",
+      "chat": [
+        "Qwen3.5-397B-A17B",
+        "gpt-oss-120b",
+        "Qwen3.8-27B",
+        "Qwen3.6-27B",
+        "Meta-Llama-3_3-70B-Instruct",
+        "Mistral-Small-3.2-24B-Instruct-2506",
+        "Qwen3-32B",
+        "Qwen3-Coder-30B-A3B-Instruct"
+      ],
+      "agent": [
+        "Qwen3-Coder-30B-A3B-Instruct",
+        "Qwen3.5-397B-A17B",
+        "gpt-oss-120b",
+        "Qwen3.8-27B",
+        "Qwen3.6-27B",
+        "Qwen3-32B",
+        "Meta-Llama-3_3-70B-Instruct"
+      ]
     },
     {
-      "provider": "Pollinations",
-      "url": "https://text.pollinations.ai/",
-      "free": true,
-      "key": null,
-      "rate": "free tier",
-      "note": "emergency pool - only used when every OVH model is busy"
+      "id": "kilo",
+      "label": "Kilo Gateway",
+      "url": "https://api.kilo.ai/api/gateway/chat/completions",
+      "type": "openai",
+      "chat": ["openrouter/free", "kilo-auto/free"],
+      "agent": ["openrouter/free", "kilo-auto/free"]
+    },
+    {
+      "id": "pollinations",
+      "label": "Pollinations",
+      "url": "https://text.pollinations.ai/openai",
+      "type": "openai",
+      "chat": ["openai-fast"],
+      "agent": ["openai-fast"]
     }
   ],
-  "banned": ["LLM7"],
-  "last_updated": "2026-08-13"
+  "limits": {
+    "chatMaxTokens": 4096,
+    "agentMaxTokens": 8192,
+    "firstTokenDeadlineMs": 16000,
+    "batchSize": 3,
+    "temperatureChat": 0.75,
+    "temperatureAgent": 0.35
+  }
 }
