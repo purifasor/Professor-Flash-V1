@@ -182,11 +182,29 @@ window.PFAgent = (() => {
     return null;
   }
 
+  // Sandboxed iframes (opaque origin) block localStorage; give generated apps
+  // a working in-memory fallback so records/scores keep working in preview.
+  const STORAGE_SHIM =
+    "<script>(function(){try{window.localStorage.setItem('__pf','1');" +
+    "window.localStorage.removeItem('__pf')}catch(e){var mk=function(){var m={};" +
+    "return{getItem:function(k){return k in m?m[k]:null},setItem:function(k,v){m[k]=String(v)}," +
+    "removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null}," +
+    "get length(){return Object.keys(m).length}}};" +
+    "try{Object.defineProperty(window,'localStorage',{value:mk(),configurable:true})}catch(_){window.localStorage=mk()}" +
+    "try{Object.defineProperty(window,'sessionStorage',{value:mk(),configurable:true})}catch(_){window.sessionStorage=mk()}}})();</script>";
+
   function buildPreviewDoc() {
     const entry = findEntryHtml();
     if (!entry) return null;
     const dir = entry.split("/").slice(0, -1).join("/");
     let doc = files.get(entry).content;
+
+    // storage shim first, so every other script sees a working localStorage
+    if (/<head[^>]*>/i.test(doc)) {
+      doc = doc.replace(/<head[^>]*>/i, (t) => t + STORAGE_SHIM);
+    } else {
+      doc = STORAGE_SHIM + doc;
+    }
 
     // normalize root-absolute refs ("/js/app.js" → "js/app.js") so generated
     // apps that ignore the relative-path rule still resolve against the
