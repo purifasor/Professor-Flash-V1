@@ -95,6 +95,21 @@ export default async function handler(req, res) {
     if (mode === "agent") {
       const filesCtx = filesContextMessage(body.files);
       if (filesCtx) finalMessages.push({ role: "system", content: filesCtx });
+
+      // live-preview runtime errors → the agent fixes them at the root
+      if (Array.isArray(body.errors) && body.errors.length) {
+        const errs = body.errors
+          .filter((e) => typeof e === "string")
+          .slice(0, 8)
+          .map((e) => "- " + e.slice(0, 300))
+          .join("\n");
+        finalMessages.push({
+          role: "system",
+          content:
+            "RUNTIME ERRORS captured in the user's live preview. Diagnose the " +
+            "root cause and re-emit the fixed file(s) in full:\n" + errs,
+        });
+      }
     }
 
     finalMessages.push(...messages);
@@ -150,7 +165,7 @@ export default async function handler(req, res) {
     sseSend(res, {
       type: "error",
       message:
-        "همهٔ موتورهای رایگان الان مشغول‌اند. چند ثانیه دیگر دوباره تلاش کن.",
+        "الان همهٔ موتورهای رایگان اشغال‌اند؛ چند ثانیه بعد دوباره بفرست.",
       details: e.details || [e.message],
     });
   }

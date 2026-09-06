@@ -1,4 +1,4 @@
-// GET /api/models — the live roster the engine is using (from Model/models.json).
+// GET /api/models — the live roster the engine is using (from brain/models.json).
 
 import { getRoster } from "./_lib/providers.js";
 

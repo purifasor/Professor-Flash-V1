@@ -1,423 +1,250 @@
-/* Professor Flash — main app: sessions, modes, SSE chat, composer. */
+// Professor Flash — main app: chat streaming, sessions, agent integration.
 window.PFApp = (() => {
   const $ = (id) => document.getElementById(id);
-  const LS_KEY = "pf.sessions.v2";
 
-  const state = {
-    mode: "chat",            // 'chat' | 'agent'
-    sessions: [],            // [{id,title,mode,messages,files,updatedAt}]
-    current: null,           // current session object
-    sending: false,
-    abort: null,
-    searchOn: false,
-  };
+  /* ============================ state ============================ */
+  const LS_KEY = "professor-flash.v3.sessions";
+  let sessions = loadSessions();
+  let currentId = null;
+  let mode = "chat";
+  let searchOn = false;
+  let streaming = false;
+  let abortCtrl = null;
 
-  /* ================================================== persistence */
   function loadSessions() {
-    try {
-      state.sessions = JSON.parse(localStorage.getItem(LS_KEY) || "[]");
-    } catch {
-      state.sessions = [];
-    }
+    try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; }
   }
+  let saveTimer = null;
   function saveSessions() {
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(state.sessions.slice(0, 60)));
-    } catch { /* quota */ }
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try { localStorage.setItem(LS_KEY, JSON.stringify(sessions.slice(0, 60))); } catch { /* full */ }
+    }, 250);
   }
-  function persistCurrent() {
-    if (!state.current || !state.current.messages.length) return;
-    const s = state.current;
-    s.updatedAt = Date.now();
-    if (s.mode === "agent") s.files = PFAgent.getFilesObject();
-    const i = state.sessions.findIndex((x) => x.id === s.id);
-    if (i >= 0) state.sessions.splice(i, 1);
-    state.sessions.unshift(s);
-    saveSessions();
-    renderSessionList();
+  const current = () => sessions.find((s) => s.id === currentId) || null;
+
+  /* ============================ ui helpers ============================ */
+  function toast(msg, ms = 2600) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => (t.hidden = true), ms);
   }
 
-  /* ================================================== sessions */
-  function newSession(mode) {
-    state.current = {
+  function scrollBottom(force) {
+    const m = $("messages");
+    const near = m.scrollHeight - m.scrollTop - m.clientHeight < 220;
+    if (force || near) m.scrollTop = m.scrollHeight;
+  }
+
+  function setStreaming(on) {
+    streaming = on;
+    $("btnSend").hidden = on;
+    $("btnStop").hidden = !on;
+    $("input").disabled = false;
+    updateSendBtn();
+  }
+
+  function updateSendBtn() {
+    $("btnSend").disabled = streaming || !$("input").value.trim();
+  }
+
+  /* ============================ sessions ============================ */
+  function newSession({ switchMode = null, keepMode = true } = {}) {
+    const s = {
       id: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: "گفتگوی جدید",
-      mode: mode || state.mode,
+      mode: keepMode ? mode : (switchMode || mode),
+      created: Date.now(),
       messages: [],
-      files: {},
-      updatedAt: Date.now(),
+      files: [],
     };
+    sessions.unshift(s);
+    currentId = s.id;
+    saveSessions();
     renderMessages();
-    $("chatTitle").textContent = "گفتگوی جدید";
-    $("engineChip").hidden = true;
-    $("hero").style.display = "";
-    if (state.current.mode === "agent") PFAgent.reset();
+    renderSessionList();
+    PFAgent.reset();
+    return s;
   }
 
-  function openSession(id) {
-    const s = state.sessions.find((x) => x.id === id);
-    if (!s) return;
-    state.current = s;
-    setMode(s.mode || "chat");
-    if (s.mode === "agent" && s.files) PFAgent.setFiles(s.files);
-    if (s.mode !== "agent") PFAgent.reset();
-    $("chatTitle").textContent = s.title;
-    renderMessages();
+  function ensureSession() {
+    if (!current()) newSession();
+    return current();
+  }
+
+  function switchSession(id) {
+    if (streaming) return;
+    currentId = id;
+    const s = current();
+    if (s) {
+      setMode(s.mode || "chat", { soft: true });
+      renderMessages();
+      PFAgent.setFiles(s.files || []);
+    }
     closeDrawer();
+    renderSessionList();
   }
 
   function deleteSession(id, ev) {
     ev.stopPropagation();
-    state.sessions = state.sessions.filter((x) => x.id !== id);
-    saveSessions();
-    renderSessionList();
-    if (state.current && state.current.id === id) newSession(state.mode);
-  }
-
-  function clearCurrent() {
-    if (!state.current) return;
-    state.current.messages = [];
-    state.current.title = "گفتگوی جدید";
-    if (state.current.mode === "agent") PFAgent.reset();
-    $("chatTitle").textContent = "گفتگوی جدید";
-    $("engineChip").hidden = true;
-    renderMessages();
-    state.sessions = state.sessions.filter((x) => x.id !== state.current.id);
+    sessions = sessions.filter((s) => s.id !== id);
+    if (currentId === id) {
+      currentId = null;
+      if (sessions.length) switchSession(sessions[0].id);
+      else newSession();
+    }
     saveSessions();
     renderSessionList();
   }
 
-  /* ================================================== mode */
-  function setMode(mode) {
-    state.mode = mode;
-    $("app").classList.toggle("agent", mode === "agent");
-    $("btnModeChat").classList.toggle("active", mode === "chat");
-    $("btnModeAgent").classList.toggle("active", mode === "agent");
-    $("bench").hidden = mode !== "agent";
-    $("input").placeholder =
-      mode === "agent"
-        ? "برنامه‌ات را توصیف کن… مثلاً: «یک بازی مار با تم فیروزه‌ای بساز»"
-        : "پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)";
-    if (state.current && state.current.mode !== mode && !state.current.messages.length) {
-      state.current.mode = mode;
+  function renderSessionList() {
+    const box = $("sessionList");
+    if (!sessions.length) {
+      box.innerHTML = '<div class="drawer-empty">هنوز گفتگویی نداری.</div>';
+      return;
+    }
+    box.innerHTML = "";
+    for (const s of sessions) {
+      const b = document.createElement("button");
+      b.className = "session-item" + (s.id === currentId ? " active" : "");
+      b.innerHTML =
+        `<span>${s.mode === "agent" ? "🤖" : "💬"}</span>` +
+        `<span class="si-title">${PFMD.esc(s.title)}</span>` +
+        `<span class="si-del" title="حذف">✕</span>`;
+      b.addEventListener("click", () => switchSession(s.id));
+      b.querySelector(".si-del").addEventListener("click", (e) => deleteSession(s.id, e));
+      box.appendChild(b);
     }
   }
 
-  /* ================================================== rendering */
-  const messagesEl = () => $("messages");
-
-  function nearBottom() {
-    const el = messagesEl();
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-  }
-  function scrollBottom(force) {
-    const el = messagesEl();
-    if (force || nearBottom()) el.scrollTop = el.scrollHeight;
+  /* ============================ messages render ============================ */
+  function fileChip(path) {
+    return `<button class="file-chip" data-file="${PFMD.esc(path)}" title="باز کردن در کارگاه">📄 ${PFMD.esc(path)}</button>`;
   }
 
   function renderMessages() {
-    const el = messagesEl();
-    el.querySelectorAll(".msg").forEach((n) => n.remove());
-    const msgs = state.current ? state.current.messages : [];
-    $("hero").style.display = msgs.length ? "none" : "";
-    msgs.forEach((m) => el.appendChild(buildMessageEl(m)));
+    const box = $("messages");
+    const s = current();
+    box.innerHTML = "";
+    if (!s || !s.messages.length) {
+      box.appendChild(buildHero());
+      return;
+    }
+    for (const m of s.messages) box.appendChild(buildMsg(m));
     scrollBottom(true);
   }
 
-  function buildMessageEl(m) {
+  function buildHero() {
+    const hero = document.createElement("div");
+    hero.innerHTML = HERO_HTML;
+    const el = hero.firstElementChild;
+    wirePromptButtons(el);
+    return el;
+  }
+
+  const HERO_HTML = $("hero") ? $("hero").outerHTML : "";
+
+  function wirePromptButtons(root) {
+    root.querySelectorAll("[data-prompt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const prompt = btn.dataset.prompt;
+        if (btn.dataset.mode) setMode(btn.dataset.mode);
+        if (btn.dataset.search) setSearch(true);
+        $("input").value = prompt;
+        updateSendBtn();
+        send(prompt);
+      });
+    });
+  }
+
+  function buildMsg(m) {
     const wrap = document.createElement("div");
-    wrap.className = "msg " + m.role;
-    const avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.textContent = m.role === "user" ? "👤" : "⚡";
-    const bubble = document.createElement("div");
-    bubble.className = "bubble";
-    if (m.role === "user") {
-      bubble.textContent = m.content;
-    } else {
-      bubble.innerHTML = PFMD.render(m.content || "");
-      if (m.error) bubble.classList.add("error");
-      bubble.appendChild(buildMetaEl(m));
-    }
-    wrap.append(avatar, bubble);
+    wrap.className = "msg " + (m.role === "user" ? "user" : "ai");
+    const avatar = m.role === "user" ? "👤" : "⚡";
+    const role = m.role === "user" ? "شما" : "پروفسور فلش";
+    const modelChip = m.model ? `<span class="model-chip">${PFMD.esc(shortModel(m.model))}</span>` : "";
+    const contentHtml = m.role === "user"
+      ? PFMD.esc(m.content)
+      : PFMD.render(m.content, { fileRenderer: fileChip });
+    const srcBox = m.search?.results?.length
+      ? `<div class="src-box">${m.search.results
+          .slice(0, 4)
+          .map((r) => `<a class="src-link" href="${PFMD.esc(r.url)}" target="_blank" rel="noopener">🔗 ${PFMD.esc(r.title)}</a>`)
+          .join("")}</div>`
+      : "";
+    wrap.innerHTML =
+      `<div class="msg-avatar">${avatar}</div>` +
+      `<div class="msg-body">` +
+      `<div class="msg-meta"><span class="msg-role">${role}</span>${modelChip}</div>` +
+      `<div class="msg-content md">${contentHtml}</div>${srcBox}</div>`;
+    wireMsg(wrap);
     return wrap;
   }
 
-  function buildMetaEl(m) {
-    const meta = document.createElement("div");
-    meta.className = "msg-meta";
-    if (m.provider) {
-      const chip = document.createElement("span");
-      chip.className = "m-chip";
-      chip.textContent = `${m.provider} · ${m.model || ""}`;
-      meta.appendChild(chip);
-    }
-    if (m.search && m.search.results && m.search.results.length) {
-      const srcWrap = document.createElement("div");
-      srcWrap.className = "sources";
-      srcWrap.innerHTML = `<span class="src-title">منابع:</span>`;
-      m.search.results.slice(0, 4).forEach((r) => {
-        const a = document.createElement("a");
-        a.href = r.url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = "🔗 " + (r.title || r.url);
-        srcWrap.appendChild(a);
-      });
-      meta.appendChild(srcWrap);
-    }
-    const copy = document.createElement("button");
-    copy.textContent = "کپی";
-    copy.onclick = () => {
-      navigator.clipboard.writeText(m.content).then(() => toast("کپی شد ✓"));
-    };
-    meta.appendChild(copy);
-    if (m.role === "assistant") {
-      const regen = document.createElement("button");
-      regen.textContent = "↻ تولید دوباره";
-      regen.onclick = () => regenerate(m);
-      meta.appendChild(regen);
-    }
-    return meta;
+  function wireMsg(wrap) {
+    wrap.querySelectorAll(".code-copy").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const code = b.closest(".code-wrap")?.querySelector("code")?.innerText || "";
+        try { await navigator.clipboard.writeText(code); b.textContent = "کپی شد ✓"; }
+        catch { b.textContent = "خطا"; }
+        setTimeout(() => (b.textContent = "کپی"), 1600);
+      })
+    );
+    wrap.querySelectorAll(".file-chip").forEach((b) =>
+      b.addEventListener("click", () => {
+        PFAgent.openMobile();
+        const path = b.dataset.file;
+        const item = [...document.querySelectorAll(".tree-item")].find((t) => t.dataset.path === path);
+        if (item) item.click();
+        else PFAgent.switchTab("files");
+      })
+    );
   }
 
-  /* -------- live assistant element while streaming -------- */
-  function makeLiveAssistant() {
-    const wrap = document.createElement("div");
-    wrap.className = "msg assistant";
-    const avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.textContent = "⚡";
-    const bubble = document.createElement("div");
-    bubble.className = "bubble";
-    bubble.innerHTML =
-      `<div class="thinking"><div class="orb"></div>` +
-      `<div class="think-text">در حال فکر کردن<span class="think-dots"></span><br>` +
-      `<span class="t-status"></span></div>` +
-      `<div class="think-elapsed"></div></div>`;
-    wrap.append(avatar, bubble);
-    return {
-      wrap,
-      bubble,
-      statusEl: bubble.querySelector(".t-status"),
-      elapsedEl: bubble.querySelector(".think-elapsed"),
-    };
+  function shortModel(id) {
+    return String(id || "").split("/").pop().replace(/:free$/, "");
   }
 
-  /* ================================================== sending */
-  async function send(text) {
-    text = (text || "").trim();
-    if (!text || state.sending) return;
-    if (!state.current) newSession(state.mode);
-    if (state.current.mode !== state.mode && !state.current.messages.length)
-      state.current.mode = state.mode;
-
-    $("hero").style.display = "none";
-    const userMsg = { role: "user", content: text };
-    state.current.messages.push(userMsg);
-    messagesEl().appendChild(buildMessageEl(userMsg));
-    if (state.current.title === "گفتگوی جدید") {
-      state.current.title = text.slice(0, 42) + (text.length > 42 ? "…" : "");
-      $("chatTitle").textContent = state.current.title;
-    }
-
-    const input = $("input");
-    input.value = "";
-    autoGrow();
-    updateSendBtn();
-
-    const live = makeLiveAssistant();
-    messagesEl().appendChild(live.wrap);
-    scrollBottom(true);
-
-    state.sending = true;
-    state.abort = new AbortController();
-    $("btnSend").hidden = true;
-    $("btnStop").hidden = false;
-
-    const startedAt = Date.now();
-    const timer = setInterval(() => {
-      live.elapsedEl.textContent = ((Date.now() - startedAt) / 1000).toFixed(0) + "s";
-    }, 500);
-
-    let raw = "";
-    let meta = { provider: null, model: null, search: null };
-    let renderScheduled = false;
-
-    const scheduleRender = () => {
-      if (renderScheduled) return;
-      renderScheduled = true;
-      setTimeout(() => {
-        renderScheduled = false;
-        live.bubble.innerHTML =
-          PFMD.render(raw) + '<span class="stream-caret"></span>';
-        scrollBottom(false);
-      }, 90);
-    };
-
-    try {
-      const payload = {
-        messages: state.current.messages.map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-        mode: state.current.mode,
-        search: state.searchOn,
-      };
-      if (state.current.mode === "agent") {
-        payload.files = PFAgent.getFilesArray();
-      }
-
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: state.abort.signal,
-      });
-      if (!res.ok || !res.body) throw new Error("http-" + res.status);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const events = buf.split("\n\n");
-        buf = events.pop() || "";
-        for (const ev of events) {
-          const line = ev.split("\n").find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          let data;
-          try {
-            data = JSON.parse(line.slice(5));
-          } catch {
-            continue;
-          }
-          if (data.type === "status") {
-            live.statusEl.textContent = data.text;
-          } else if (data.type === "delta") {
-            raw += data.text;
-            scheduleRender();
-            if (state.current.mode === "agent") PFAgent.ingestStream(raw);
-          } else if (data.type === "done") {
-            meta = data;
-          } else if (data.type === "error") {
-            throw new Error(data.message || "error");
-          }
-        }
-      }
-    } catch (e) {
-      clearInterval(timer);
-      state.sending = false;
-      $("btnSend").hidden = false;
-      $("btnStop").hidden = true;
-      if (e.name === "AbortError") {
-        // user pressed stop: keep partial answer if any
-        if (raw.trim()) {
-          finishAssistantMessage(live, raw, meta);
-        } else {
-          live.wrap.remove();
-        }
-        persistCurrent();
-        return;
-      }
-      live.bubble.innerHTML =
-        `<p>⚠️ ${escapeHtml(e.message || "خطایی رخ داد.")}</p>` +
-        `<p style="color:var(--text-dim);font-size:12px">موتورهای رایگان شلوغ‌اند؛ چند لحظه بعد دوباره بفرست.</p>`;
-      const errMsg = { role: "assistant", content: raw || "⚠️ خطا در دریافت پاسخ.", error: true };
-      state.current.messages.push(errMsg);
-      persistCurrent();
-      return;
-    }
-
-    clearInterval(timer);
-    state.sending = false;
-    $("btnSend").hidden = false;
-    $("btnStop").hidden = true;
-
-    if (!raw.trim()) {
-      live.bubble.innerHTML = "<p>⚠️ پاسخی دریافت نشد. دوباره تلاش کن.</p>";
-      return;
-    }
-    finishAssistantMessage(live, raw, meta);
-  }
-
-  function finishAssistantMessage(live, raw, meta) {
-    const m = {
-      role: "assistant",
-      content: raw,
-      provider: meta.provider,
-      model: meta.model,
-      search: meta.search || null,
-    };
-    state.current.messages.push(m);
-    live.bubble.innerHTML = PFMD.render(raw);
-    live.bubble.appendChild(buildMetaEl(m));
-    if (meta.provider) {
-      const chip = $("engineChip");
-      chip.hidden = false;
-      chip.textContent = `${meta.provider} · ${meta.model || ""}`;
-    }
-    if (state.current.mode === "agent") {
-      const added = PFAgent.ingestFinal(raw);
-      if (added.length) {
-        PFAgent.switchTab("preview");
-        toast(`${added.length} فایل ساخته/به‌روز شد ✓`);
+  /* ============================ mode & search ============================ */
+  function setMode(next, { soft = false } = {}) {
+    mode = next === "agent" ? "agent" : "chat";
+    $("app").dataset.mode = mode;
+    $("btnModeChat").classList.toggle("active", mode === "chat");
+    $("btnModeAgent").classList.toggle("active", mode === "agent");
+    $("btnModeChat").setAttribute("aria-selected", mode === "chat");
+    $("btnModeAgent").setAttribute("aria-selected", mode === "agent");
+    $("bench").hidden = mode !== "agent";
+    $("benchFab").hidden = mode !== "agent";
+    $("btnSearch").style.display = mode === "chat" ? "" : "none";
+    $("input").placeholder = mode === "agent"
+      ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی مار با تم فیروزه‌ای بساز)"
+      : "پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)";
+    // slide the mode thumb (RTL: chat button first/right, agent slides left)
+    const btn = mode === "chat" ? $("btnModeChat") : $("btnModeAgent");
+    const thumb = $("modeThumb");
+    const chatW = $("btnModeChat").offsetWidth;
+    thumb.style.width = btn.offsetWidth + "px";
+    thumb.style.transform = mode === "chat" ? "translateX(0)" : `translateX(${-chatW}px)`;
+    if (!soft) {
+      const s = current();
+      if (s && s.messages.length && s.mode !== mode) {
+        newSession({ keepMode: true });
+      } else if (s) {
+        s.mode = mode;
+        saveSessions();
       }
     }
-    persistCurrent();
-    scrollBottom(false);
   }
 
-  function regenerate(assistantMsg) {
-    if (state.sending) return;
-    const msgs = state.current.messages;
-    const idx = msgs.indexOf(assistantMsg);
-    if (idx < 0) return;
-    // find the user message that produced this answer
-    let uIdx = -1;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (msgs[i].role === "user") { uIdx = i; break; }
-    }
-    if (uIdx < 0) return;
-    const userText = msgs[uIdx].content;
-    msgs.splice(uIdx); // drop that user message and everything after it
-    renderMessages();
-    send(userText);
+  function setSearch(on) {
+    searchOn = !!on;
+    $("btnSearch").setAttribute("aria-pressed", String(searchOn));
+    toast(searchOn ? "جستجوی وب فعال شد 🌐" : "جستجوی وب خاموش شد");
   }
 
-  /* ================================================== input */
-  function autoGrow() {
-    const el = $("input");
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 180) + "px";
-  }
-  function updateSendBtn() {
-    $("btnSend").disabled = !$("input").value.trim() || state.sending;
-  }
-
-  /* ================================================== drawer */
-  function renderSessionList() {
-    const list = $("sessionList");
-    list.innerHTML = "";
-    state.sessions.forEach((s) => {
-      const b = document.createElement("button");
-      b.className =
-        "session-item" + (state.current && state.current.id === s.id ? " active" : "");
-      b.innerHTML =
-        `<span class="s-mode">${s.mode === "agent" ? "عامل" : "چت"}</span>` +
-        `<span class="s-title">${escapeHtml(s.title)}</span>` +
-        `<span class="s-del" title="حذف">🗑</span>`;
-      b.onclick = () => openSession(s.id);
-      b.querySelector(".s-del").onclick = (ev) => deleteSession(s.id, ev);
-      list.appendChild(b);
-    });
-    if (!state.sessions.length) {
-      list.innerHTML =
-        '<p style="color:var(--text-faint);font-size:12px;text-align:center;padding:20px">هنوز گفتگویی نداری.</p>';
-    }
-  }
+  /* ============================ drawer ============================ */
   function openDrawer() {
     renderSessionList();
     $("drawer").classList.add("open");
@@ -428,87 +255,254 @@ window.PFApp = (() => {
     $("drawerBackdrop").classList.remove("show");
   }
 
-  /* ================================================== misc */
-  function toast(msg) {
-    const t = $("toast");
-    t.textContent = msg;
-    t.hidden = false;
-    clearTimeout(t._tm);
-    t._tm = setTimeout(() => (t.hidden = true), 2400);
-  }
-  function escapeHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
+  /* ============================ sending / streaming ============================ */
+  async function send(text, { errors = null } = {}) {
+    text = String(text || "").trim();
+    if (!text || streaming) return;
+    const s = ensureSession();
 
-  /* ================================================== init */
-  document.addEventListener("DOMContentLoaded", () => {
-    loadSessions();
-    newSession("chat");
+    if (s.messages.length === 0) s.title = text.slice(0, 46);
+    s.mode = mode;
+    s.messages.push({ role: "user", content: text });
+    saveSessions();
+    renderMessages();
 
-    $("btnModeChat").onclick = () => {
-      setMode("chat");
-      if (!state.current || state.current.messages.length) newSession("chat");
+    // assistant placeholder
+    const aiMsg = { role: "assistant", content: "", model: null, _live: true };
+    s.messages.push(aiMsg);
+    const msgEl = buildStreamingMsg();
+    $("messages").appendChild(msgEl);
+    scrollBottom(true);
+
+    setStreaming(true);
+    abortCtrl = new AbortController();
+
+    const statusEl = msgEl.querySelector(".status-line");
+    const contentEl = msgEl.querySelector(".msg-content");
+    const typingEl = msgEl.querySelector(".typing");
+    let raw = "";
+    let gotFirst = false;
+    let renderTimer = null;
+    let ingestTimer = null;
+
+    const scheduleRender = () => {
+      if (renderTimer) return;
+      renderTimer = setTimeout(() => {
+        renderTimer = null;
+        contentEl.innerHTML = PFMD.render(raw, { fileRenderer: fileChip });
+        wireMsg(msgEl);
+        scrollBottom();
+      }, 140);
     };
-    $("btnModeAgent").onclick = () => {
+    const scheduleIngest = () => {
+      if (mode !== "agent" || ingestTimer) return;
+      ingestTimer = setTimeout(() => {
+        ingestTimer = null;
+        PFAgent.ingest(raw);
+      }, 400);
+    };
+
+    // build API history (strip heavy file blocks from older agent turns)
+    const history = s.messages.slice(0, -1).map((m) => ({
+      role: m.role,
+      content:
+        m.role === "assistant"
+          ? m.content.replace(/```file:[^\n`]+\n[\s\S]*?```/g, "\n[فایل‌ها ساخته شد]\n")
+          : m.content,
+    }));
+
+    const payload = { mode, messages: history };
+    if (mode === "chat" && searchOn) payload.search = true;
+    if (mode === "agent") {
+      payload.files = PFAgent.getFiles();
+      if (errors && errors.length) payload.errors = errors;
+    }
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: abortCtrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error("http-" + res.status);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const events = buf.split("\n\n");
+        buf = events.pop() || "";
+        for (const ev of events) {
+          const line = ev.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          let d;
+          try { d = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+          if (d.type === "status") {
+            if (!gotFirst) {
+              statusEl.hidden = false;
+              statusEl.querySelector("span:last-child").textContent = d.text;
+            }
+          } else if (d.type === "delta") {
+            if (!gotFirst) {
+              gotFirst = true;
+              statusEl.hidden = true;
+              typingEl.hidden = true;
+            }
+            raw += d.text;
+            scheduleRender();
+            scheduleIngest();
+          } else if (d.type === "done") {
+            aiMsg.model = d.model ? `${d.provider || ""} · ${d.model}` : null;
+            if (d.search) aiMsg.search = d.search;
+          } else if (d.type === "error") {
+            throw Object.assign(new Error(d.message || "engine-error"), { details: d.details });
+          }
+        }
+      }
+    } catch (e) {
+      if (e.name === "AbortError") {
+        raw += raw ? "\n\n⏹ متوقف شد." : "";
+      } else {
+        aiMsg._error = e.message;
+      }
+    }
+
+    // finalize
+    clearTimeout(renderTimer);
+    clearTimeout(ingestTimer);
+    statusEl.hidden = true;
+    typingEl.hidden = true;
+
+    if (mode === "agent") PFAgent.ingest(raw, { final: true });
+
+    aiMsg.content = raw;
+    delete aiMsg._live;
+    const sNow = current();
+    if (sNow && mode === "agent") sNow.files = PFAgent.getFiles();
+    saveSessions();
+
+    if (aiMsg._error && !raw) {
+      msgEl.querySelector(".msg-content").innerHTML = "";
+      const box = document.createElement("div");
+      box.className = "err-box";
+      box.innerHTML = `<span>⚠ ${PFMD.esc(aiMsg._error)}</span>`;
+      const retry = document.createElement("button");
+      retry.textContent = "تلاش دوباره";
+      retry.addEventListener("click", () => {
+        const s2 = current();
+        if (s2) { s2.messages.pop(); saveSessions(); }
+        msgEl.remove();
+        send(text, { errors });
+      });
+      box.appendChild(retry);
+      msgEl.querySelector(".msg-content").appendChild(box);
+    } else {
+      msgEl.querySelector(".msg-content").innerHTML = PFMD.render(raw, { fileRenderer: fileChip });
+      if (aiMsg.model) {
+        const meta = msgEl.querySelector(".msg-meta");
+        meta.insertAdjacentHTML("beforeend", `<span class="model-chip">${PFMD.esc(shortModel(aiMsg.model))}</span>`);
+      }
+      wireMsg(msgEl);
+    }
+    setStreaming(false);
+    scrollBottom();
+  }
+
+  function buildStreamingMsg() {
+    const wrap = document.createElement("div");
+    wrap.className = "msg ai";
+    wrap.innerHTML =
+      `<div class="msg-avatar">⚡</div>` +
+      `<div class="msg-body">` +
+      `<div class="msg-meta"><span class="msg-role">پروفسور فلش</span></div>` +
+      `<div class="status-line" hidden><span class="status-dot"></span><span>…</span></div>` +
+      `<div class="typing"><span></span><span></span><span></span></div>` +
+      `<div class="msg-content md"></div></div>`;
+    return wrap;
+  }
+
+  function stop() {
+    if (abortCtrl) abortCtrl.abort();
+  }
+
+  /* ============================ auto-fix (agent) ============================ */
+  function wireAgent() {
+    PFAgent.onFixRequest = (errors) => {
+      if (streaming) return;
       setMode("agent");
-      if (!state.current || state.current.messages.length) newSession("agent");
-      toast("حالت عامل کدنویس فعال شد — برنامه‌ات را توصیف کن 🤖");
+      PFAgent.openMobile();
+      send(
+        "پیش‌نمایش این خطاها را گرفت. علت اصلی را پیدا کن و فایل(های) اصلاح‌شده را کامل دوباره بساز:\n" +
+          errors.map((e) => "- " + e).join("\n"),
+        { errors }
+      );
     };
-    $("btnNew").onclick = () => newSession(state.mode);
-    $("btnSessions").onclick = openDrawer;
-    $("btnCloseDrawer").onclick = closeDrawer;
-    $("drawerBackdrop").onclick = closeDrawer;
-    $("btnClear").onclick = clearCurrent;
+  }
 
-    $("btnSearch").onclick = () => {
-      state.searchOn = !state.searchOn;
-      $("btnSearch").classList.toggle("on", state.searchOn);
-      $("btnSearch").setAttribute("aria-pressed", state.searchOn);
-      toast(state.searchOn ? "جستجوی وب روشن شد 🌐" : "جستجوی وب خاموش شد");
-    };
+  /* ============================ init ============================ */
+  function init() {
+    // move hero template out (kept as string for re-use)
+    $("messages").innerHTML = "";
+
+    $("btnModeChat").addEventListener("click", () => setMode("chat"));
+    $("btnModeAgent").addEventListener("click", () => setMode("agent"));
+    $("btnSearch").addEventListener("click", () => setSearch(!searchOn));
+    $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeDrawer(); } });
+    $("btnSessions").addEventListener("click", openDrawer);
+    $("btnCloseDrawer").addEventListener("click", closeDrawer);
+    $("drawerBackdrop").addEventListener("click", closeDrawer);
 
     const input = $("input");
     input.addEventListener("input", () => {
-      autoGrow();
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 180) + "px";
       updateSendBtn();
     });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        send(input.value);
+        const v = input.value;
+        input.value = "";
+        input.style.height = "auto";
+        updateSendBtn();
+        send(v);
       }
     });
-    $("btnSend").onclick = () => send(input.value);
-    $("btnStop").onclick = () => state.abort && state.abort.abort();
-
-    // hero suggestion cards
-    document.querySelectorAll(".hero-card").forEach((card) => {
-      card.onclick = () => {
-        const mode = card.dataset.try;
-        if (mode === "agent") setMode("agent");
-        if (mode === "search" && !state.searchOn) $("btnSearch").click();
-        if (mode === "search") setMode("chat");
-        newSession(state.mode);
-        input.value = card.dataset.prompt;
-        autoGrow();
-        updateSendBtn();
-        send(input.value);
-      };
+    $("btnSend").addEventListener("click", () => {
+      const v = input.value;
+      input.value = "";
+      input.style.height = "auto";
+      updateSendBtn();
+      send(v);
     });
+    $("btnStop").addEventListener("click", stop);
 
-    // delegated copy buttons inside markdown
-    messagesEl().addEventListener("click", (e) => {
-      const btn = e.target.closest(".copy-btn");
-      if (!btn) return;
-      const code = btn.closest("pre").querySelector(".code-body");
-      navigator.clipboard
-        .writeText(code.innerText)
-        .then(() => {
-          btn.textContent = "کپی شد ✓";
-          setTimeout(() => (btn.textContent = "کپی"), 1600);
-        });
-    });
-  });
+    wirePromptButtons(document);
+    wireAgent();
 
-  return { toast, send };
+    // restore last session or start fresh
+    if (sessions.length) {
+      currentId = sessions[0].id;
+      const s = current();
+      setMode(s.mode || "chat", { soft: true });
+      renderMessages();
+      PFAgent.setFiles(s.files || []);
+    } else {
+      newSession();
+      setMode("chat", { soft: true });
+      renderMessages();
+    }
+    setMode(mode, { soft: true });
+    input.focus();
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+
+  return { toast };
 })();

@@ -1,4 +1,4 @@
-// Brain: composes system prompts from the repo's Model/Skills/Knowledge files.
+// Brain: composes system prompts from the repo's brain/ directory.
 // Editing those markdown files on GitHub and redeploying re-tunes the AI —
 // the repo IS the brain.
 
@@ -9,8 +9,11 @@ const EMBEDDED = {
   persona:
     "You are Professor Flash, a senior world-class AI engineer. Answer freshly " +
     "from the user's words — never canned. Detect the user's language and answer " +
-    "in it (Persian users get fluent natural Persian). Be direct, warm, precise. " +
-    "No moralizing lectures, no filler, no fabricated facts. Use markdown.",
+    "in it (Persian users get fluent natural Persian). Be direct and precise. " +
+    "No flattery, no moralizing lectures, no filler, no fabricated facts. Use markdown.",
+  chat:
+    "CHAT MODE: think first, open with the substance, right-size the answer, " +
+    "structure with markdown, give real opinions with reasons.",
   agent:
     "AGENT MODE: you are an autonomous senior engineer. Emit EVERY file as a " +
     "fenced block whose info string is exactly `file:<relative-path>`, complete " +
@@ -21,8 +24,21 @@ const EMBEDDED = {
 let _cache = { at: 0, parts: null };
 
 function readSafe(rel) {
+  const candidates = [rel, rel.replace(/^brain\//, "")]; // new layout, legacy fallback
+  for (const c of candidates) {
+    try {
+      return fs.readFileSync(path.join(process.cwd(), ...c.split("/")), "utf8");
+    } catch {
+      /* try next */
+    }
+  }
+  // legacy dirs: Model/, Skills/, Knowledge/
+  return null;
+}
+
+function readLegacy(legacyRel) {
   try {
-    return fs.readFileSync(path.join(process.cwd(), rel), "utf8");
+    return fs.readFileSync(path.join(process.cwd(), ...legacyRel.split("/")), "utf8");
   } catch {
     return null;
   }
@@ -31,53 +47,54 @@ function readSafe(rel) {
 function loadParts() {
   if (_cache.parts && Date.now() - _cache.at < 5 * 60 * 1000) return _cache.parts;
 
-  const persona =
-    readSafe("Model/persona.md") ||
-    EMBEDDED.persona;
+  const persona = readSafe("brain/persona.md") || readLegacy("Model/persona.md") || EMBEDDED.persona;
+
+  const chatPrompt = readSafe("brain/prompts/chat.md") || EMBEDDED.chat;
+
+  const agentPrompt =
+    readSafe("brain/prompts/agent.md") || readLegacy("Model/agent-protocol.md") || EMBEDDED.agent;
 
   const skillNames = ["reasoning", "coding", "design", "research", "communication"];
   const skills = skillNames
-    .map((n) => readSafe(`Skills/${n}.md`))
+    .map((n) => readSafe(`brain/skills/${n}.md`) || readLegacy(`Skills/${n}.md`))
     .filter(Boolean)
     .join("\n\n");
 
-  const agent =
-    readSafe("Model/agent-protocol.md") ||
-    EMBEDDED.agent;
-
-  const knowledge = ["design-tokens", "web-dev"]
-    .map((n) => readSafe(`Knowledge/${n}.md`))
+  const knowledge = ["design-tokens", "web-dev", "persian"]
+    .map((n) => readSafe(`brain/knowledge/${n}.md`) || readLegacy(`Knowledge/${n}.md`))
     .filter(Boolean)
     .join("\n\n");
 
-  _cache = { at: Date.now(), parts: { persona, skills, agent, knowledge } };
+  _cache = { at: Date.now(), parts: { persona, chatPrompt, agentPrompt, skills, knowledge } };
   return _cache.parts;
 }
 
 export function chatSystemPrompt() {
-  const { persona, skills } = loadParts();
+  const { persona, chatPrompt, skills, knowledge } = loadParts();
   return [
     persona,
-    skills,
-    "CONTEXT: You are running inside the Professor Flash web app. The user may " +
-      "be Persian-speaking; mirror their language exactly. Today is " +
+    chatPrompt,
+    skills ? "SKILLS:\n" + skills : "",
+    knowledge ? "REFERENCE KNOWLEDGE:\n" + knowledge : "",
+    "CONTEXT: You are running live inside the Professor Flash web app " +
+      "(free, online, no signup). Today is " +
       new Date().toISOString().slice(0, 10) +
-      ".",
+      ". Mirror the user's language exactly.",
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
 export function agentSystemPrompt() {
-  const { persona, skills, agent, knowledge } = loadParts();
+  const { persona, agentPrompt, skills, knowledge } = loadParts();
   return [
     persona,
-    skills,
-    agent,
-    knowledge ? "REFERENCE:\n" + knowledge : "",
+    agentPrompt,
+    skills ? "SKILLS:\n" + skills : "",
+    knowledge ? "REFERENCE KNOWLEDGE:\n" + knowledge : "",
     "REMINDER: the client parses ```file:<path> blocks exactly. Output ONLY " +
       "complete files with that marker. Default to a stunning, polished, fully " +
-      "working result. Entry file MUST be index.html.",
+      "working result with zero console errors. Entry file MUST be index.html.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -88,14 +105,14 @@ export function filesContextMessage(files) {
   if (!Array.isArray(files) || !files.length) return null;
   const clean = files
     .filter((f) => f && typeof f.path === "string" && typeof f.content === "string")
-    .slice(0, 24);
+    .slice(0, 32);
   if (!clean.length) return null;
 
-  let budget = 30000;
+  let budget = 40000;
   const parts = [];
   for (const f of clean) {
     let content = f.content;
-    if (content.length > 6000) content = content.slice(0, 6000) + "\n…(truncated)";
+    if (content.length > 8000) content = content.slice(0, 8000) + "\n…(truncated)";
     if (budget - content.length < 0) {
       parts.push(`### ${f.path}\n(omitted for size — ask the user if you need it)`);
       continue;

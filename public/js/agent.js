@@ -1,274 +1,232 @@
-/* Agent workbench: file store, stream parsing, live preview, ZIP export. */
+// Agent workbench: virtual file system, live preview, ZIP export, auto-fix.
 window.PFAgent = (() => {
-  const files = new Map(); // path -> { content, isNew }
-  let selected = null;
-  let lastParsedCount = 0;
-
   const $ = (id) => document.getElementById(id);
-  const els = {
-    tree: () => $("fileTree"),
-    count: () => $("fileCount"),
-    viewName: () => $("fileViewName"),
-    viewCode: () => $("fileViewCode"),
-    copyBtn: () => $("btnCopyFile"),
-    frame: () => $("previewFrame"),
-    empty: () => $("previewEmpty"),
-    zip: () => $("btnZip"),
-  };
+  const files = new Map(); // path -> content
+  let activeFile = null;
+  let previewErrors = [];
+  let onFixRequest = null; // set by app.js
+  let previewUrl = null;
 
-  const FILE_RE = /```file:([^\n`]+)\n([\s\S]*?)```/g;
-
-  /* ------------------------------------------------------------ store */
-  function reset() {
-    files.clear();
-    selected = null;
-    lastParsedCount = 0;
-    syncUI();
-    showPreviewEmpty();
-  }
-
-  function setFiles(obj) {
-    files.clear();
-    Object.entries(obj || {}).forEach(([p, content]) =>
-      files.set(p, { content, isNew: false })
-    );
-    lastParsedCount = 0;
-    syncUI();
-    refreshPreview();
-  }
-
-  function getFilesObject() {
-    const o = {};
-    files.forEach((v, k) => (o[k] = v.content));
-    return o;
-  }
-
-  function getFilesArray() {
-    return [...files.entries()].map(([path, v]) => ({ path, content: v.content }));
-  }
-
-  function upsert(path, content, isNew) {
-    const p = path.trim();
-    if (!p) return false;
-    const prev = files.get(p);
-    if (prev && prev.content === content) return false;
-    files.set(p, { content, isNew: !!isNew || !prev });
-    return true;
-  }
-
-  /* -------------------------------------------------- stream ingestion */
-  // Parse COMPLETE file blocks found so far in the streamed text.
-  // Returns array of newly-added paths since the last call.
-  function ingestStream(fullText) {
-    const matches = [...fullText.matchAll(FILE_RE)];
-    const added = [];
-    for (let i = lastParsedCount; i < matches.length; i++) {
-      const [, p, c] = matches[i];
-      if (upsert(p, c.replace(/\n$/, ""), true)) added.push(p.trim());
-    }
-    lastParsedCount = matches.length;
-    if (added.length) {
-      syncUI();
-      refreshPreview();
-    }
-    return added;
-  }
-
-  // Final parse after stream end (robust; resets counter).
-  function ingestFinal(fullText) {
-    lastParsedCount = 0;
-    const added = ingestStream(fullText);
-    if (!files.size) added.push(...fallbackParse(fullText));
-    files.forEach((v) => (v.isNew = false));
-    syncUI();
-    refreshPreview();
-    return added;
-  }
-
-  // Models sometimes ignore the strict ```file:path protocol. Recover:
-  //  - ```some/path.ext fences (info string itself is a filename)
-  //  - a lone ```html fence → treat as index.html
-  function fallbackParse(text) {
-    const added = [];
-    const KNOWN = /\.(html?|css|m?js|json|py|md|txt|svg|tsx?|xml|ya?ml|sh)$/i;
-    const pathRe = /```([A-Za-z0-9_\-./]+\.[A-Za-z0-9]{1,6})\s*\n([\s\S]*?)```/g;
+  /* ------------------------------------------------ parsing */
+  // Extract COMPLETE ```file:path blocks (during streaming) or also the
+  // trailing open block (final pass).
+  function parseFiles(text, { final = false } = {}) {
+    const out = [];
+    const re = /```file:([^\n`]+)\n([\s\S]*?)```/g;
     let m;
-    while ((m = pathRe.exec(text))) {
-      const p = m[1];
-      if (!KNOWN.test(p)) continue;
-      if (upsert(p, m[2].replace(/\n$/, ""), true)) added.push(p);
+    while ((m = re.exec(text))) {
+      out.push({ path: m[1].trim(), content: m[2].replace(/\n$/, "") });
     }
-    if (!files.size) {
-      const hm = text.match(/```(?:html?|HTML)\s*\n([\s\S]*?)```/);
-      if (hm && upsert("index.html", hm[1].replace(/\n$/, ""), true)) {
-        added.push("index.html");
+    if (final) {
+      const tail = /```file:([^\n`]+)\n([\s\S]*)$/.exec(text.replace(/```file:[^\n`]+\n[\s\S]*?```/g, ""));
+      if (tail && tail[2].trim()) out.push({ path: tail[1].trim(), content: tail[2] });
+    }
+    return out;
+  }
+
+  function validPath(p) {
+    return p && !p.includes("..") && !p.startsWith("/") && p.length < 200 &&
+      !/```/.test(p) && /\.[a-z0-9]+$/i.test(p);
+  }
+
+  /** Feed the full accumulated agent answer; upsert parsed files. */
+  function ingest(text, opts = {}) {
+    let added = 0;
+    for (const f of parseFiles(text, opts)) {
+      if (!validPath(f.path)) continue;
+      if (!files.has(f.path) || files.get(f.path) !== f.content) {
+        files.set(f.path, f.content);
+        added++;
       }
     }
+    if (added) {
+      renderTree();
+      updateCounts();
+      buildPreview();
+    }
     return added;
   }
 
-  /* ------------------------------------------------------------ UI */
-  function iconFor(p) {
-    const ext = (p.split(".").pop() || "").toLowerCase();
-    return {
-      html: "🌐", htm: "🌐", css: "🎨", js: "⚡", mjs: "⚡", json: "🧾",
-      md: "📝", py: "🐍", svg: "🖼", txt: "📄", png: "🖼", jpg: "🖼",
-    }[ext] || "📄";
+  function reset() {
+    files.clear();
+    activeFile = null;
+    previewErrors = [];
+    renderTree();
+    updateCounts();
+    showEmpty(true);
+    $("previewFrame").hidden = true;
+    $("previewStatus").hidden = true;
+    $("btnZip").disabled = true;
+    $("btnOpenPreview").disabled = true;
+    $("btnFixErrors").hidden = true;
   }
 
-  function syncUI() {
-    const tree = els.tree();
-    if (!tree) return;
-    tree.innerHTML = "";
-    const sorted = [...files.keys()].sort();
-    sorted.forEach((p) => {
-      const f = files.get(p);
-      const btn = document.createElement("button");
-      btn.className = "file-node" + (f.isNew ? " new" : "") + (p === selected ? " active" : "");
-      btn.innerHTML =
-        `<span class="f-dot"></span><span>${iconFor(p)} ${escapeHtml(p)}</span>` +
-        `<span class="f-size">${formatSize(f.content.length)}</span>`;
-      btn.onclick = () => selectFile(p);
-      tree.appendChild(btn);
-    });
-    els.count().textContent = files.size;
-    els.zip().disabled = files.size === 0;
-    if (selected && !files.has(selected)) {
-      selected = null;
-      els.viewName().textContent = "فایلی انتخاب نشده";
-      els.viewCode().textContent = "روی یک فایل بزن تا محتواش را ببینی.";
-      els.copyBtn().hidden = true;
+  function getFiles() {
+    return [...files.entries()].map(([path, content]) => ({ path, content }));
+  }
+  function setFiles(list) {
+    files.clear();
+    (list || []).forEach((f) => f && validPath(f.path) && files.set(f.path, f.content));
+    activeFile = null;
+    renderTree();
+    updateCounts();
+    if (files.size) buildPreview();
+  }
+
+  /* ------------------------------------------------ tree + viewer */
+  const ICONS = { html: "🌐", css: "🎨", js: "⚙️", json: "🧾", md: "📝", svg: "🖼", png: "🖼", jpg: "🖼", txt: "📄" };
+  const iconFor = (p) => ICONS[(p.split(".").pop() || "").toLowerCase()] || "📄";
+
+  function renderTree() {
+    const tree = $("fileTree");
+    const paths = [...files.keys()].sort((a, b) => a.localeCompare(b));
+    if (!paths.length) {
+      tree.innerHTML = '<div class="drawer-empty">هنوز فایلی ساخته نشده.</div>';
+      return;
     }
+    const byDir = new Map();
+    for (const p of paths) {
+      const i = p.lastIndexOf("/");
+      const dir = i === -1 ? "" : p.slice(0, i);
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(p);
+    }
+    let html = "";
+    for (const [dir, list] of byDir) {
+      if (dir) html += `<div class="tree-folder">📁 ${PFMD.esc(dir)}/</div>`;
+      for (const p of list) {
+        const name = p.split("/").pop();
+        html += `<button class="tree-item${p === activeFile ? " active" : ""}" data-path="${PFMD.esc(p)}" title="${PFMD.esc(p)}">
+          <span class="fi">${iconFor(p)}</span><span>${PFMD.esc(name)}</span></button>`;
+      }
+    }
+    tree.innerHTML = html;
+    tree.querySelectorAll(".tree-item").forEach((b) =>
+      b.addEventListener("click", () => openFile(b.dataset.path))
+    );
   }
 
-  function selectFile(p) {
-    selected = p;
-    const f = files.get(p);
-    if (!f) return;
-    els.viewName().textContent = p;
-    const codeEl = els.viewCode();
-    const ext = (p.split(".").pop() || "").toLowerCase();
-    const langMap = { htm: "html" };
-    codeEl.innerHTML = PFMD.highlight(f.content, langMap[ext] || ext);
-    els.copyBtn().hidden = false;
-    syncUI();
+  function openFile(path) {
+    if (!files.has(path)) return;
+    activeFile = path;
+    $("fileViewName").textContent = path;
+    $("btnCopyFile").hidden = false;
+    const code = $("fileViewCode");
+    const ext = (path.split(".").pop() || "").toLowerCase();
+    code.textContent = files.get(path);
+    code.className = "language-" + ext;
+    if (window.hljs) {
+      try { hljs.highlightElement(code); } catch { /* noop */ }
+    }
+    renderTree();
     switchTab("files");
   }
 
-  function copySelected() {
-    if (!selected) return;
-    navigator.clipboard
-      .writeText(files.get(selected).content)
-      .then(() => PFApp.toast("کپی شد ✓"));
+  function updateCounts() {
+    const n = String(files.size);
+    $("fileCount").textContent = n;
+    $("fabCount").textContent = n;
+    $("btnZip").disabled = !files.size;
+    $("btnOpenPreview").disabled = !files.size;
+    if (files.size) showEmpty(false);
   }
 
-  /* ------------------------------------------------------------ preview */
-  function resolvePath(baseDir, ref) {
-    if (/^(https?:)?\/\//.test(ref) || ref.startsWith("data:")) return ref;
-    let parts = (baseDir ? baseDir.split("/") : []).concat(ref.split("/"));
-    const out = [];
-    for (const part of parts) {
-      if (!part || part === ".") continue;
-      if (part === "..") out.pop();
-      else out.push(part);
-    }
-    return out.join("/");
+  function showEmpty(show) {
+    $("previewEmpty").style.display = show ? "flex" : "none";
   }
 
-  function findEntryHtml() {
-    if (files.has("index.html")) return "index.html";
-    for (const p of files.keys()) if (/^index\.html?$/i.test(p)) return p;
-    for (const p of files.keys()) if (/\.html?$/i.test(p)) return p;
-    return null;
+  /* ------------------------------------------------ preview */
+  const ERROR_HOOK = `<script>
+(function(){
+  function send(type,msg){ try{ parent.postMessage({pf:'preview',type:type,message:String(msg).slice(0,500)},'*'); }catch(e){} }
+  window.addEventListener('error',function(e){ send('error',(e.message||'error')+' @ '+(e.filename||'').split('/').pop()+':'+(e.lineno||'')); });
+  window.addEventListener('unhandledrejection',function(e){ send('error','unhandled: '+(e.reason&&(e.reason.message||e.reason)||'promise')); });
+  var ce=console.error.bind(console); console.error=function(){ send('error',[].map.call(arguments,String).join(' ')); ce.apply(null,arguments); };
+  window.addEventListener('load',function(){ send('ready','loaded'); });
+})();
+<\/script>`;
+
+  function isLocalRef(u) {
+    return u && !/^(https?:)?\/\//i.test(u) && !u.startsWith("data:") && !u.startsWith("#");
   }
 
-  // Sandboxed iframes (opaque origin) block localStorage; give generated apps
-  // a working in-memory fallback so records/scores keep working in preview.
-  const STORAGE_SHIM =
-    "<script>(function(){try{window.localStorage.setItem('__pf','1');" +
-    "window.localStorage.removeItem('__pf')}catch(e){var mk=function(){var m={};" +
-    "return{getItem:function(k){return k in m?m[k]:null},setItem:function(k,v){m[k]=String(v)}," +
-    "removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null}," +
-    "get length(){return Object.keys(m).length}}};" +
-    "try{Object.defineProperty(window,'localStorage',{value:mk(),configurable:true})}catch(_){window.localStorage=mk()}" +
-    "try{Object.defineProperty(window,'sessionStorage',{value:mk(),configurable:true})}catch(_){window.sessionStorage=mk()}}})();</script>";
+  function buildPreview() {
+    const frame = $("previewFrame");
+    const status = $("previewStatus");
+    // pick entry html
+    let entry = null;
+    for (const p of files.keys()) if (p.toLowerCase() === "index.html") entry = p;
+    if (!entry) for (const p of files.keys()) if (p.endsWith(".html")) entry = p;
+    if (!entry) return;
 
-  function buildPreviewDoc() {
-    const entry = findEntryHtml();
-    if (!entry) return null;
-    const dir = entry.split("/").slice(0, -1).join("/");
-    let doc = files.get(entry).content;
+    let html = files.get(entry);
+    const dir = entry.includes("/") ? entry.slice(0, entry.lastIndexOf("/") + 1) : "";
+    const resolve = (ref) => {
+      // resolve ref relative to entry dir, normalize a/../b
+      const parts = (dir + ref).split("/").filter((s) => s && s !== ".");
+      const out = [];
+      for (const s of parts) s === ".." ? out.pop() : out.push(s);
+      return out.join("/");
+    };
 
-    // storage shim first, so every other script sees a working localStorage
-    if (/<head[^>]*>/i.test(doc)) {
-      doc = doc.replace(/<head[^>]*>/i, (t) => t + STORAGE_SHIM);
-    } else {
-      doc = STORAGE_SHIM + doc;
-    }
-
-    // normalize root-absolute refs ("/js/app.js" → "js/app.js") so generated
-    // apps that ignore the relative-path rule still resolve against the
-    // virtual file system instead of leaking to the host origin
-    doc = doc.replace(/\b(src|href)=["']\/(?!\/)/gi, '$1="');
-
-    doc = doc.replace(/<link\b[^>]*>/gi, (tag) => {
-      if (!/rel=["']?stylesheet/i.test(tag)) return tag;
-      const m = tag.match(/href=["']([^"']+)["']/i);
-      if (!m) return tag;
-      const ref = m[1];
-      if (/^(https?:)?\/\//i.test(ref) || ref.startsWith("data:")) return tag;
-      const p = resolvePath(dir, ref);
-      const f = files.get(p);
-      // unresolved local refs are neutralized (never fetch the host app)
-      return f
-        ? `<style data-src="${p}">\n${f.content}\n</style>`
-        : `<style data-dead="${p}"></style>`;
+    // inline local stylesheets
+    html = html.replace(/<link\b[^>]*>/gi, (tag) => {
+      const href = (tag.match(/href\s*=\s*["']([^"']+)["']/i) || [])[1];
+      const rel = (tag.match(/rel\s*=\s*["']([^"']+)["']/i) || [])[1] || "";
+      if (!href || !isLocalRef(href) || !/stylesheet|\.css$/i.test(rel + href)) return tag;
+      const p = resolve(href);
+      return files.has(p) ? `<style data-src="${p}">\n${files.get(p)}\n</style>` : tag;
     });
 
-    doc = doc.replace(
-      /<script\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>\s*<\/script>/gi,
-      (tag, _a, src) => {
-        if (/^(https?:)?\/\//i.test(src) || src.startsWith("data:")) return tag;
-        const p = resolvePath(dir, src);
-        const f = files.get(p);
-        return f
-          ? `<script data-src="${p}">\n${f.content}\n</script>` // inlined
-          : `<script data-dead="${p}"></script>`;
-      }
-    );
-    return doc;
-  }
+    // inline local scripts (keep execution order)
+    html = html.replace(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>\s*<\/script>/gi, (tag, src) => {
+      if (!isLocalRef(src)) return tag;
+      const p = resolve(src);
+      if (!files.has(p)) return tag;
+      const type = (tag.match(/type\s*=\s*["']([^"']+)["']/i) || [])[1] || "";
+      const isModule = /module/i.test(type);
+      return `<script data-src="${p}"${isModule ? ' type="module"' : ""}>\n${files.get(p)}\n<\/script>`;
+    });
 
-  function refreshPreview() {
-    const doc = buildPreviewDoc();
-    const frame = els.frame();
-    const empty = els.empty();
-    if (!frame || !empty) return;
-    if (!doc) {
-      if (files.size) {
-        empty.querySelector("p").innerHTML =
-          "فایل‌ها ساخته شدند ولی فایل HTML برای پیش‌نمایش نیست.<br>پیش‌نمایش زنده فقط برای برنامه‌های وب (دارای index.html) فعال می‌شود.";
-      }
-      showPreviewEmpty();
-      return;
-    }
-    empty.hidden = true;
+    // error hook right after <head> (or at top)
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + "\n" + ERROR_HOOK);
+    else html = ERROR_HOOK + html;
+
+    previewErrors = [];
+    $("btnFixErrors").hidden = true;
+    status.hidden = false;
+    status.classList.remove("err");
+    status.textContent = "building preview… " + new Date().toLocaleTimeString();
+
+    showEmpty(false);
     frame.hidden = false;
-    frame.srcdoc = doc;
+    frame.srcdoc = html;
+
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
   }
 
-  function showPreviewEmpty() {
-    const frame = els.frame();
-    const empty = els.empty();
-    if (frame) frame.hidden = true;
-    if (empty) empty.hidden = false;
-  }
+  // messages from the preview iframe
+  window.addEventListener("message", (e) => {
+    const d = e.data;
+    if (!d || d.pf !== "preview") return;
+    const status = $("previewStatus");
+    if (d.type === "error") {
+      previewErrors.push(d.message);
+      status.classList.add("err");
+      status.textContent = "⚠ " + previewErrors.slice(-3).join("\n⚠ ");
+      $("btnFixErrors").hidden = false;
+    } else if (d.type === "ready") {
+      status.classList.remove("err");
+      status.textContent = "✓ running · " + files.size + " file(s) · " + new Date().toLocaleTimeString();
+    }
+  });
 
-  /* ------------------------------------------------------------ zip */
+  /* ------------------------------------------------ zip */
   async function downloadZip() {
-    if (!files.size) return;
+    if (!files.size || typeof JSZip === "undefined") return;
     const zip = new JSZip();
-    files.forEach((v, p) => zip.file(p, v.content));
+    for (const [p, c] of files) zip.file(p, c);
     const blob = await zip.generateAsync({ type: "blob" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -277,45 +235,50 @@ window.PFAgent = (() => {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    PFApp.toast("فایل ZIP دانلود شد ⬇");
+    PFApp && PFApp.toast && PFApp.toast("فایل ZIP دانلود شد ⬇");
   }
 
-  /* ------------------------------------------------------------ misc */
+  /* ------------------------------------------------ tabs & wiring */
   function switchTab(name) {
-    document.querySelectorAll(".bench-tab").forEach((t) =>
-      t.classList.toggle("active", t.dataset.tab === name)
-    );
-    $("paneFiles").classList.toggle("active", name === "files");
-    $("panePreview").classList.toggle("active", name === "preview");
-    if (name === "preview") refreshPreview();
+    $("tabPreview").classList.toggle("active", name === "preview");
+    $("tabFiles").classList.toggle("active", name === "files");
+    $("panePreview").hidden = name !== "preview";
+    $("paneFiles").hidden = name !== "files";
   }
 
-  function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-  function formatSize(n) {
-    return n < 1024 ? n + "B" : (n / 1024).toFixed(1) + "K";
+  function init() {
+    $("tabPreview").addEventListener("click", () => switchTab("preview"));
+    $("tabFiles").addEventListener("click", () => switchTab("files"));
+    $("btnRefreshPreview").addEventListener("click", buildPreview);
+    $("btnZip").addEventListener("click", downloadZip);
+    $("btnOpenPreview").addEventListener("click", () => {
+      if (previewUrl) window.open(previewUrl, "_blank");
+    });
+    $("btnCopyFile").addEventListener("click", async () => {
+      if (!activeFile) return;
+      try {
+        await navigator.clipboard.writeText(files.get(activeFile) || "");
+        PFApp && PFApp.toast && PFApp.toast("کپی شد ✓");
+      } catch { /* clipboard unavailable */ }
+    });
+    $("btnFixErrors").addEventListener("click", () => {
+      if (onFixRequest && previewErrors.length) {
+        const errs = [...new Set(previewErrors)].slice(0, 8);
+        onFixRequest(errs);
+      }
+    });
+    $("benchFab").addEventListener("click", () => {
+      $("bench").classList.toggle("mobile-open");
+    });
+    renderTree();
   }
 
-  function hasFiles() {
-    return files.size > 0;
-  }
-
-  /* ------------------------------------------------------------ wire */
-  document.addEventListener("DOMContentLoaded", () => {
-    $("tabFiles").onclick = () => switchTab("files");
-    $("tabPreview").onclick = () => switchTab("preview");
-    $("btnRefreshPreview").onclick = () => {
-      refreshPreview();
-      PFApp.toast("پیش‌نمایش تازه شد ↻");
-    };
-    $("btnZip").onclick = downloadZip;
-    els.copyBtn().onclick = copySelected;
-  });
+  document.addEventListener("DOMContentLoaded", init);
 
   return {
-    reset, setFiles, getFilesObject, getFilesArray,
-    ingestStream, ingestFinal, refreshPreview, hasFiles,
-    switchTab, downloadZip,
+    ingest, reset, getFiles, setFiles, parseFiles, buildPreview, switchTab,
+    get errors() { return previewErrors; },
+    set onFixRequest(fn) { onFixRequest = fn; },
+    openMobile() { $("bench").classList.add("mobile-open"); },
   };
 })();
