@@ -3,11 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="پروفسور فلش">
 <title>پروفسور فلش — هوش مصنوعی و عامل کدنویس</title>
 <meta name="description" content="هوش مصنوعی رایگان و آنلاین: چت هوشمند با جستجوی وب و عامل کدنویس چندفایلی با پیش‌نمایش زنده و دانلود ZIP. بدون نصب، بدون ثبت‌نام.">
-<meta name="theme-color" content="#060609">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff4d6d'/%3E%3Cstop offset='1' stop-color='%23b3123f'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='15' fill='%230b0b11'/%3E%3Crect x='1.5' y='1.5' width='61' height='61' rx='14' fill='none' stroke='%23313142' stroke-width='2'/%3E%3Cpath d='M37 8 L18 37 h11.5 L27 56 L46 27 h-12 z' fill='url(%23g)'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+<meta name="theme-color" content="#040302">
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/favicon-64.png">
+<link rel="apple-touch-icon" href="/assets/logo-128.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
 <link rel="stylesheet" href="/css/styles.css">
 </head>
@@ -27,12 +32,7 @@
   <aside class="sidebar" id="sidebar" aria-label="تاریخچه گفتگوها">
     <div class="side-head">
       <div class="logo" title="پروفسور فلش">
-        <svg viewBox="0 0 64 64" width="24" height="24" aria-hidden="true">
-          <defs><linearGradient id="lgSide" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#ff4d6d"/><stop offset="1" stop-color="#b3123f"/>
-          </linearGradient></defs>
-          <path d="M37 8 L18 37 h11.5 L27 56 L46 27 h-12 z" fill="url(#lgSide)"/>
-        </svg>
+        <img src="/assets/logo.png" alt="نشان پروفسور فلش" width="38" height="38" draggable="false">
       </div>
       <div class="brand-text">
         <strong>پروفسور فلش</strong>
@@ -50,7 +50,7 @@
     <nav class="session-list" id="sessionList"></nav>
 
     <div class="side-foot">
-      <div class="side-engines">NEMOTRON-550B · MINIMAX-M3 · STEP-3.7 · LAGUNA</div>
+      <div class="side-engines">NEMOTRON-550B · NORTH-CODE · LAGUNA · QWEN-CODER — FREE</div>
     </div>
   </aside>
 
@@ -77,6 +77,13 @@
         </button>
       </div>
 
+      <div class="engine-picker" role="group" aria-label="موتور فکری" title="انتخاب موتور فکری — کیفیت اول">
+        <span class="engine-led" aria-hidden="true"></span>
+        <span class="engine-label" id="engineLabel">مغز حداکثری</span>
+        <button class="engine-btn active" id="engineMax" title="مغز حداکثری — نیموترون ۵۵۰ میلیاردی با استدلال بالا">MAX</button>
+        <button class="engine-btn" id="engineAgent" title="موتور تخصصی کدنویسی">CODE</button>
+      </div>
+
       <div class="top-actions">
         <button class="icon-chip" id="btnSearch" title="جستجوی زنده در وب" aria-pressed="false">
           <svg viewBox="0 0 24 24" width="14" height="14"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -92,12 +99,7 @@
         <div class="messages" id="messages">
           <div class="hero" id="hero">
             <div class="hero-logo">
-              <svg viewBox="0 0 64 64" width="50" height="50" aria-hidden="true">
-                <defs><linearGradient id="lgHero" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stop-color="#ff4d6d"/><stop offset="1" stop-color="#b3123f"/>
-                </linearGradient></defs>
-                <path d="M37 8 L18 37 h11.5 L27 56 L46 27 h-12 z" fill="url(#lgHero)"/>
-              </svg>
+              <img src="/assets/logo.png" alt="پروفسور فلش" width="76" height="76" draggable="false">
             </div>
             <h1>پروفسور فلش</h1>
             <span class="hero-tag">NEON&nbsp;CORE&nbsp;//&nbsp;FREE&nbsp;·&nbsp;ONLINE&nbsp;·&nbsp;NO&nbsp;SIGNUP</span>
@@ -119,18 +121,18 @@
                 <span class="hc-d">دانش زنده از اینترنت برای سؤال‌های به‌روز</span>
               </button>
             </div>
-            <div class="hero-engines">ENGINES: <b>Nemotron 550B</b> · MiniMax M3 · Step 3.7 · North Code · <b>Laguna</b> — FREE</div>
+            <div class="hero-engines">ENGINES: <b>Nemotron 550B</b> · North Code · Laguna · Qwen Coder — FREE</div>
           </div>
         </div>
 
         <footer class="composer-wrap">
           <div class="composer" id="composer">
             <textarea id="input" rows="1" placeholder="پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)" aria-label="پیام"></textarea>
-            <button class="send-btn" id="btnSend" title="ارسال" disabled>
-              <svg viewBox="0 0 24 24" width="19" height="19"><path d="M22 2 L11 13 M22 2 l-7 20 -4-9 -9-4 z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <button class="send-btn stop" id="btnStop" type="button" title="توقف" aria-label="توقف پاسخ" hidden>
+              <svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>
             </button>
-            <button class="send-btn stop" id="btnStop" title="توقف" hidden>
-              <svg viewBox="0 0 24 24" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>
+            <button class="send-btn" id="btnSend" type="button" title="ارسال" aria-label="ارسال پیام" disabled>
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3.4 20.4 22 12 3.4 3.6l3.2 7L15 12l-8.4 1.4z" fill="currentColor"/></svg>
             </button>
           </div>
           <div class="composer-hint" id="composerHint">مدل‌های قوی و رایگان · پاسخ تازه، نه آماده · <b>مغز متصل به گیت‌هاب</b></div>
@@ -149,6 +151,10 @@
               <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
               فایل‌ها <span class="file-count" id="fileCount">0</span>
             </button>
+            <button class="bench-tab" data-tab="console" id="tabConsole">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path d="m7 9 3 3-3 3M13 15h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="4" width="20" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+              کنسول <span class="file-count" id="consoleCount">0</span>
+            </button>
           </div>
           <div class="bench-actions">
             <div class="dev-switch" id="devSwitch" title="اندازه پیش‌نمایش">
@@ -162,9 +168,16 @@
                 <svg viewBox="0 0 24 24" width="15" height="15"><rect x="7" y="2" width="10" height="20" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M11 18.5h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
               </button>
             </div>
-            <button class="tool-btn" id="btnFixErrors" title="رفع خودکار خطاهای پیش‌نمایش" hidden>🛠 رفع خطا</button>
-            <button class="tool-btn" id="btnRefreshPreview" title="تازه‌سازی پیش‌نمایش">↻</button>
-            <button class="tool-btn" id="btnOpenPreview" title="باز کردن در تب جدید" disabled>⤢</button>
+            <button class="tool-btn" id="btnFixErrors" title="رفع خودکار خطاهای پیش‌نمایش" hidden>
+              <svg viewBox="0 0 24 24" width="13" height="13"><path d="m14.5 5.5 4 4L8 20H4v-4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m12.5 7.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              رفع خطا
+            </button>
+            <button class="tool-btn" id="btnRefreshPreview" title="تازه‌سازی پیش‌نمایش">
+              <svg viewBox="0 0 24 24" width="13" height="13"><path d="M20 12a8 8 0 1 1-2.9-6.2M20 3v5h-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button class="tool-btn" id="btnOpenPreview" title="باز کردن در تب جدید" disabled>
+              <svg viewBox="0 0 24 24" width="13" height="13"><path d="M14 4h6v6M20 4 11 13M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <button class="tool-btn accent" id="btnZip" title="دانلود همه فایل‌ها به صورت ZIP" disabled>
               <svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
               ZIP
@@ -175,9 +188,9 @@
         <div class="bench-body">
           <div class="bench-pane active" id="panePreview">
             <div class="preview-empty" id="previewEmpty">
-              <div class="pe-sigil">⚡</div>
+              <div class="pe-sigil"><img src="/assets/logo.png" alt="" width="44" height="44" draggable="false"></div>
               <h3>کارگاه عامل کدنویس</h3>
-              <p>بگو چه برنامه‌ای می‌خواهی — عامل با نهایت توان مدل، پروژه را به صورت چندفایلی سازمان‌دهی می‌کند،<br>این‌جا اجراش می‌کند و می‌توانی یک‌جا دانلودش کنی.</p>
+              <p>بگو چه برنامه‌ای می‌خواهی — عامل با نهایت توان مدل، پروژه را به صورت چندفایلی سازمان‌دهی می‌کند،<br>این‌جا اجراش می‌کند، خطاها را می‌بیند و خودش می‌سنجد و می‌توانی یک‌جا دانلودش کنی.</p>
               <div class="pe-examples">
                 <button class="pe-chip" data-prompt="یک بازی مار کلاسیک با تم نئون قرمز و دارک بساز؛ با امتیاز، رکورد، کنترل کیبورد و لمسی و افکت‌های نرم. ساختار چندفایلی تمیز.">🐍 بازی مار</button>
                 <button class="pe-chip" data-prompt="یک ماشین‌حساب مهندسی با تم دارک نئون قرمز بساز؛ با تاریخچه محاسبات و پشتیبانی کامل از کیبورد. ساختار چندفایلی تمیز.">🧮 ماشین‌حساب</button>
@@ -186,7 +199,7 @@
             </div>
             <div class="preview-stage" id="previewStage" data-device="desktop" hidden>
               <div class="preview-device">
-                <iframe id="previewFrame" title="پیش‌نمایش" sandbox="allow-scripts allow-modals"></iframe>
+                <iframe id="previewFrame" title="پیش‌نمایش" sandbox="allow-scripts allow-modals allow-forms allow-downloads allow-popups allow-pointer-lock" referrerpolicy="no-referrer"></iframe>
               </div>
             </div>
             <div class="preview-status" id="previewStatus" hidden></div>
@@ -203,24 +216,37 @@
               <pre class="file-code"><code id="fileViewCode"></code><span class="fv-placeholder" id="fvPlaceholder">روی یک فایل بزن تا محتواش را این‌جا ببینی.</span></pre>
             </div>
           </div>
+
+          <div class="bench-pane" id="paneConsole" hidden>
+            <div class="console-wrap">
+              <div class="console-head">
+                <span class="con-title">کنسول اجرا — خروجی زندهٔ برنامه در پیش‌نمایش</span>
+                <button class="tool-btn" id="btnClearConsole">پاک کردن</button>
+              </div>
+              <div class="console-box" id="consoleBox"></div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
   </div>
 
   <!-- mobile workbench toggle -->
-  <button class="bench-fab" id="benchFab" hidden>🖥 کارگاه <span class="file-count" id="fabCount">0</span></button>
+  <button class="bench-fab" id="benchFab" hidden>
+    <svg viewBox="0 0 24 24" width="15" height="15"><rect x="2" y="4" width="20" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    کارگاه <span class="file-count" id="fabCount">0</span>
+  </button>
 </div>
 
 <div class="side-backdrop" id="sideBackdrop"></div>
 <div class="toast" id="toast" hidden></div>
 
-<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="/js/markdown.js"></script>
-<script src="/js/agent.js"></script>
-<script src="/js/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+<script src="/js/markdown.js" defer></script>
+<script src="/js/agent.js" defer></script>
+<script src="/js/app.js" defer></script>
 </body>
 </html>

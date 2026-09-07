@@ -1,31 +1,27 @@
 {
-  "$comment": "Professor Flash brain roster — free, keyless, strong models. The backend (api/_lib/providers.js) reads this file live; edit and push to re-tune the brain. Order = preference. `reasoningOff`: send reasoning:{enabled:false} so hybrid reasoning models answer cleanly (auto-retries with effort:low when a model mandates reasoning).",
+  "$comment": "Professor Flash brain roster v2 — free, keyless, strong models. Read live by api/_lib/providers.js; edit and push to re-tune the brain. Order = preference (quality first, batchSize 1). `brain`: the strongest reasoning slots used by the MAX engine (reasoning effort:high). `reasoningOff:false` providers get raw OpenAI params. When a model mandates reasoning it is auto-retried with effort:low and remembered.",
   "providers": [
     {
       "id": "kilo",
       "label": "Kilo Gateway",
       "url": "https://api.kilo.ai/api/gateway/chat/completions",
       "type": "openai",
-      "reasoningOff": true,
+      "brain": [
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+      ],
       "chat": [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "dots-studio/dots-3-note-preview:free",
-        "minimax/minimax-m3:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "minimax/minimax-m2.7:free",
-        "stepfun/step-3.7-flash:free",
         "nvidia/nemotron-3.5-lightning:free",
+        "stepfun/step-3.7-flash:free",
         "thinkingmachines/inkling:free"
       ],
       "agent": [
-        "poolside/laguna-s-2.1:free",
         "cohere/north-mini-code:free",
-        "poolside/laguna-xs-2.1:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "stepfun/step-3.7-flash:free",
+        "poolside/laguna-s-2.1:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "dots-studio/dots-3-note-preview:free",
-        "minimax/minimax-m3:free"
+        "stepfun/step-3.7-flash:free"
       ]
     },
     {
@@ -33,11 +29,13 @@
       "label": "OVHcloud AI",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       "type": "openai",
+      "brain": [
+        "gpt-oss-120b"
+      ],
       "chat": [
         "gpt-oss-120b",
-        "Meta-Llama-3_3-70B-Instruct",
         "Qwen3-32B",
-        "Mistral-Small-3.2-24B-Instruct-2506"
+        "Meta-Llama-3_3-70B-Instruct"
       ],
       "agent": [
         "Qwen3-Coder-30B-A3B-Instruct",
@@ -58,9 +56,9 @@
   ],
   "limits": {
     "chatMaxTokens": 4096,
-    "agentMaxTokens": 16384,
-    "firstTokenDeadlineMs": 22000,
-    "batchSize": 2,
+    "agentMaxTokens": 30000,
+    "firstTokenDeadlineMs": 45000,
+    "batchSize": 1,
     "temperatureChat": 0.7,
     "temperatureAgent": 0.3
   }

@@ -25,12 +25,16 @@ info string is exactly `file:` followed by the relative path:
 
 Rules:
 1. One file per block. Paths are case-sensitive, relative, use `/`.
-2. COMPLETE files only — never fragments, never «// rest unchanged».
+2. COMPLETE files only — never fragments, never «// rest unchanged», never
+   empty bodies. A file block with no real content is a CONTRACT VIOLATION;
+   the client rejects it and asks again.
 3. Re-emit the WHOLE file when modifying it (the client upserts by path).
 4. Short plan (3–6 bullets) BEFORE the blocks; `SUMMARY:` after them —
    what was built, key design decisions, how to use it.
 5. Never nest file blocks inside other code blocks. Never invent other
    markers. Entry point MUST be `index.html` at the project root.
+6. Finish every file you start. If the answer is long, that is fine — the
+   budget is 30k tokens; completeness beats brevity. Never end mid-file.
 
 ## Cross-file consistency (the #1 failure mode — check twice)
 
@@ -78,12 +82,20 @@ load with zero console errors.
 - Define a design system in CSS custom properties (`--bg`, `--surface`,
   `--accent`, `--radius`, …) and use it consistently.
 - Typography: clear hierarchy, comfortable line-height, Vazirmatn for Persian
-  UI (`https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css`).
+  UI (`https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css`).
 - Fully responsive (mobile-first). Persian UI → `dir="rtl"`.
 - Animations must be smooth and purposeful — never a harsh blinking cursor,
   never janky loops. Respect `prefers-reduced-motion`.
 
-## Spatial reasoning (2D/3D)
+## Runtime contract (the preview is a sandboxed iframe — know its limits)
+- The app runs in an iframe with scripts enabled but WITHOUT same-origin.
+  `localStorage`/`sessionStorage` ARE available (an injected shim provides
+  in-memory storage) — use them freely, but data lives only for the session.
+- Do NOT rely on `document.cookie`, `indexedDB`, or external `fetch` to
+  private APIs (CORS still applies). Fonts/CDN via https are fine.
+- No build tools, no imports from node_modules — plain browser JS only;
+  `<script src>` local files work (the client inlines them).
+- Keep everything self-contained so the entry `index.html` runs immediately.
 For games, canvases, drag-drop, charts, or 3D: reason explicitly about the
 coordinate system, sizes, collisions, and transform math BEFORE coding.
 Use Canvas/SVG/CSS-3D/WebGL-via-CDN as fits. Test the geometry mentally with

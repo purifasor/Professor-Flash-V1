@@ -7,15 +7,23 @@ window.PFApp = (() => {
   /* ============================ state ============================ */
   const LS_KEY = "professor-flash.v3.sessions";
   const LS_SIDE = "professor-flash.side";
+  const LS_ENGINE = "professor-flash.engine";
   let sessions = loadSessions();
   let currentId = null;
   let mode = "chat";
   let searchOn = false;
   let streaming = false;
   let abortCtrl = null;
+  let engineChoice = loadEngine(); // "max" | "agent"
 
   function loadSessions() {
     try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; }
+  }
+  function loadEngine() {
+    try {
+      const v = localStorage.getItem(LS_ENGINE);
+      return v === "agent" ? "agent" : "max";
+    } catch { return "max"; }
   }
   let saveTimer = null;
   function saveSessions() {
@@ -47,11 +55,31 @@ window.PFApp = (() => {
     $("btnSend").hidden = on;
     $("btnStop").hidden = !on;
     $("messages").classList.toggle("stream-lock", on);
+    if (window.PFAgent && typeof PFAgent.setBusy === "function") PFAgent.setBusy(on);
     updateSendBtn();
   }
 
   function updateSendBtn() {
     $("btnSend").disabled = streaming || !$("input").value.trim();
+  }
+
+  /* ============================ engine switch ============================ */
+  // MAX = strongest brain (Nemotron Ultra 550B @ high reasoning).
+  // AGENT = coding-tuned specialists that follow the file protocol.
+  function applyEngineUi() {
+    $("engineMax").classList.toggle("active", engineChoice === "max");
+    $("engineAgent").classList.toggle("active", engineChoice === "agent");
+    const map = {
+      max: { chat: "مغز حداکثری", agent: "مغز حداکثری — استدلال بالا" },
+      agent: { chat: "موتور تخصصی", agent: "موتور تخصصی کدنویسی" },
+    };
+    $("engineLabel").textContent = map[engineChoice][mode];
+  }
+  function setEngine(choice) {
+    engineChoice = choice === "agent" ? "agent" : "max";
+    try { localStorage.setItem(LS_ENGINE, engineChoice); } catch { /* noop */ }
+    applyEngineUi();
+    toast(engineChoice === "max" ? "مغز حداکثری فعال شد — کیفیت اول 🧠" : "موتور تخصصی کدنویسی فعال شد ⚙");
   }
 
   /* ============================ sessions ============================ */
@@ -251,8 +279,9 @@ window.PFApp = (() => {
       ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی مار با تم نئون قرمز بساز)"
       : "پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)";
     $("composerHint").innerHTML = mode === "agent"
-      ? "عامل کدنویس: پروژهٔ <b>چندفایلی</b> سازمان‌یافته + اجرای زنده در کارگاه + دانلود ZIP"
+      ? "عامل کدنویس: پروژهٔ <b>چندفایلی</b> سازمان‌یافته + اجرای زنده در کارگاه + کنسول خطا + ZIP"
       : "مدل‌های قوی و رایگان · پاسخ تازه، نه آماده · <b>مغز متصل به گیت‌هاب</b>";
+    applyEngineUi();
     if (!soft) {
       const s = current();
       if (s && s.messages.length && s.mode !== mode) {
@@ -356,7 +385,7 @@ window.PFApp = (() => {
           : m.content,
     }));
 
-    const payload = { mode, messages: history };
+    const payload = { mode, messages: history, engine: engineChoice };
     if (mode === "chat" && searchOn) payload.search = true;
     if (mode === "agent") {
       payload.files = PFAgent.getFiles();
@@ -500,6 +529,7 @@ window.PFApp = (() => {
       if (streaming) return;
       setMode("agent");
       PFAgent.openMobile();
+      PFAgent.pushConsole("log", "auto-fix: asking the agent to repair " + errors.length + " error(s)…");
       send(
         "پیش‌نمایش این خطاها را گرفت. علت اصلی را پیدا کن و فایل(های) اصلاح‌شده را کامل دوباره بساز:\n" +
           errors.map((e) => "- " + e).join("\n"),
@@ -516,6 +546,8 @@ window.PFApp = (() => {
     $("btnModeChat").addEventListener("click", () => setMode("chat"));
     $("btnModeAgent").addEventListener("click", () => setMode("agent"));
     $("btnSearch").addEventListener("click", () => setSearch(!searchOn));
+    $("engineMax").addEventListener("click", () => setEngine("max"));
+    $("engineAgent").addEventListener("click", () => setEngine("agent"));
     $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeSideMobile(); } });
     $("btnOpenSide").addEventListener("click", openSide);
     $("btnCloseSide").addEventListener("click", closeSide);
@@ -574,6 +606,7 @@ window.PFApp = (() => {
       newSession();
     }
     renderSessionList();
+    applyEngineUi();
     input.focus();
   }
 

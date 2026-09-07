@@ -1,20 +1,28 @@
-// Agent workbench: virtual file system, stable live preview, device sizes,
-// closable file viewer, ZIP export, auto-fix.
-// Stability: the preview iframe is reloaded ONLY when the built HTML actually
-// changed, and rebuilds are debounced while the agent is still streaming.
+// Agent workbench v2: virtual file system, stable blob preview (no srcdoc),
+// sandbox-tolerant localStorage shim, live console mirror, auto-fix loop,
+// auto-open files/preview after builds, closable file viewer, ZIP export.
+//
+// Preview stability: the app runs inside a sandboxed <iframe>. Two invariants:
+//  1. Content is served via blob: URL (fresh URL per build) so the document
+//     gets a real origin context; `<a download>` / window.open still work
+//     thanks to allow-downloads/allow-popups.
+//  2. localStorage/sessionStorage are inaccessible under
+//     allow-same-origin-less sandboxes — a tiny inline shim is injected BEFORE
+//     any user script so persisted apps run unmodified.
 window.PFAgent = (() => {
   const $ = (id) => document.getElementById(id);
   const files = new Map(); // path -> content
   let activeFile = null;
   let previewErrors = [];
+  let consoleLines = [];
   let onFixRequest = null; // set by app.js
   let previewUrl = null;
   let lastPreviewHtml = null;
   let previewTimer = null;
+  let autoFixInFlight = false;
+  let fixCount = 0;
 
   /* ------------------------------------------------ parsing */
-  // Extract COMPLETE ```file:path blocks (during streaming) or also the
-  // trailing open block (final pass).
   function parseFiles(text, { final = false } = {}) {
     const out = [];
     const re = /```file:([^\n`]+)\n([\s\S]*?)```/g;
@@ -23,32 +31,47 @@ window.PFAgent = (() => {
       out.push({ path: m[1].trim(), content: m[2].replace(/\n$/, "") });
     }
     if (final) {
-      const tail = /```file:([^\n`]+)\n([\s\S]*)$/.exec(text.replace(/```file:[^\n`]+\n[\s\S]*?```/g, ""));
+      const tail = /```file:([^\n`]+)\n([\s\S]*)$/.exec(
+        text.replace(/```file:[^\n`]+\n[\s\S]*?```/g, "")
+      );
       if (tail && tail[2].trim()) out.push({ path: tail[1].trim(), content: tail[2] });
     }
     return out;
   }
 
   function validPath(p) {
-    return p && !p.includes("..") && !p.startsWith("/") && p.length < 200 &&
-      !/```/.test(p) && /\.[a-z0-9]+$/i.test(p);
+    return (
+      p && !p.includes("..") && !p.startsWith("/") && p.length < 200 &&
+      !/```/.test(p) && /\.[a-z0-9]+$/i.test(p)
+    );
   }
 
   /** Feed the full accumulated agent answer; upsert parsed files. */
   function ingest(text, opts = {}) {
     let added = 0;
+    let addedPaths = [];
     for (const f of parseFiles(text, opts)) {
       if (!validPath(f.path)) continue;
       if (!files.has(f.path) || files.get(f.path) !== f.content) {
         files.set(f.path, f.content);
         added++;
+        addedPaths.push(f.path);
       }
     }
     if (added) {
       renderTree();
       updateCounts();
-      if (opts.final) buildPreview();
-      else schedulePreview();
+      if (opts.final) {
+        buildPreview();
+        // auto-open the first freshly built file in the viewer
+        const pick =
+          addedPaths.find((p) => p === "index.html") ||
+          addedPaths.find((p) => p.endsWith(".html")) ||
+          addedPaths[0];
+        if (pick) openFile(pick, { silent: true });
+      } else {
+        schedulePreview();
+      }
     } else if (opts.final) {
       buildPreview(); // files may be unchanged, but ensure pane state is right
     }
@@ -59,14 +82,18 @@ window.PFAgent = (() => {
     files.clear();
     activeFile = null;
     previewErrors = [];
+    consoleLines = [];
     lastPreviewHtml = null;
+    fixCount = 0;
+    autoFixInFlight = false;
     clearTimeout(previewTimer);
     const frame = $("previewFrame");
-    try { frame.srcdoc = ""; } catch { /* noop */ }
+    try { frame.src = "about:blank"; } catch { /* noop */ }
     if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
     renderTree();
     updateCounts();
     renderFileView();
+    renderConsole();
     showEmpty(true);
     $("previewStage").hidden = true;
     $("previewStatus").hidden = true;
@@ -144,7 +171,14 @@ window.PFAgent = (() => {
     placeholder.style.display = "none";
     name.textContent = activeFile;
     const ext = (activeFile.split(".").pop() || "").toLowerCase();
-    code.textContent = files.get(activeFile);
+    const content = files.get(activeFile) || "";
+    // empty file → visible warning instead of a blank viewer
+    if (!content.trim()) {
+      code.textContent = "// ⚠ فایل خالی است — عامل هنوز محتوایش را ننوشته است.";
+      code.className = "";
+      return;
+    }
+    code.textContent = content;
     code.className = "language-" + ext;
     if (window.hljs) {
       try {
@@ -154,12 +188,12 @@ window.PFAgent = (() => {
     }
   }
 
-  function openFile(path) {
+  function openFile(path, { silent = false } = {}) {
     if (!files.has(path)) return false;
     activeFile = path;
     renderTree();
     renderFileView();
-    switchTab("files");
+    if (!silent) switchTab("files");
     return true;
   }
 
@@ -168,6 +202,9 @@ window.PFAgent = (() => {
     activeFile = null;
     renderTree();
     renderFileView();
+    // after closing, show the preview tab again (the viewer is file-scoped)
+    if (!$("panePreview").hidden) return;
+    switchTab("preview");
   }
 
   function updateCounts() {
@@ -182,17 +219,73 @@ window.PFAgent = (() => {
     $("previewEmpty").style.display = show ? "flex" : "none";
   }
 
-  /* ------------------------------------------------ preview */
-  const ERROR_HOOK = `<script>
-(function(){
-  function send(type,msg){ try{ parent.postMessage({pf:'preview',type:type,message:String(msg).slice(0,500)},'*'); }catch(e){} }
-  window.addEventListener('error',function(e){ send('error',(e.message||'error')+' @ '+(e.filename||'').split('/').pop()+':'+(e.lineno||'')); });
-  window.addEventListener('unhandledrejection',function(e){ send('error','unhandled: '+(e.reason&&(e.reason.message||e.reason)||'promise')); });
-  var ce=console.error.bind(console); console.error=function(){ send('error',[].map.call(arguments,String).join(' ')); ce.apply(null,arguments); };
-  window.addEventListener('load',function(){ send('ready','loaded'); });
+  /* ------------------------------------------------ runtime shim */
+  // Injected as the FIRST <head> script: lets sandboxed documents use
+  // localStorage/sessionStorage (in-memory) and keeps console.* observable.
+  // Also patches CDN font links to their correct MIME-typed URLs so Vazirmatn
+  // loads inside the preview (jsdelivr npm path, not the blocked gh path).
+  const RUNTIME_SHIM = `<script>
+(function () {
+  try { window.localStorage.getItem("x"); } catch (e) {
+    var mem = {};
+    var mk = function () {
+      return {
+        getItem: function (k) { return Object.prototype.hasOwnProperty.call(mem, String(k)) ? mem[String(k)] : null; },
+        setItem: function (k, v) { mem[String(k)] = String(v); },
+        removeItem: function (k) { delete mem[String(k)]; },
+        clear: function () { mem = {}; },
+        key: function (i) { var ks = Object.keys(mem); return i < ks.length ? ks[i] : null; },
+        get length() { return Object.keys(mem).length; },
+      };
+    };
+    try {
+      Object.defineProperty(window, "localStorage", { value: mk(), configurable: true });
+      Object.defineProperty(window, "sessionStorage", { value: mk(), configurable: true });
+    } catch (e2) { /* non-configurable in some engines — best effort */ }
+  }
+  function send(type, msg) {
+    try { parent.postMessage({ pf: "preview", type: type, message: String(msg).slice(0, 500) }, "*"); } catch (e) {}
+  }
+  window.addEventListener("error", function (e) {
+    send("error", (e.message || "error") + " @" + String(e.filename || "").split("/").pop() + ":" + (e.lineno || ""));
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    send("error", "unhandled: " + (e.reason && (e.reason.message || e.reason) || "promise"));
+  });
+  ["log", "warn", "error", "info"].forEach(function (m) {
+    var orig = console[m] ? console[m].bind(console) : function () {};
+    console[m] = function () {
+      send(m === "warn" || m === "error" ? "error" : "log",
+        [].map.call(arguments, function (a) {
+          try { return typeof a === "object" ? JSON.stringify(a).slice(0, 200) : String(a); } catch (e) { return "[?]"; }
+        }).join(" "));
+      orig.apply(null, arguments);
+    };
+  });
+  window.addEventListener("load", function () { send("ready", "loaded"); });
 })();
 <\/script>`;
 
+  const FONT_FIXES = [
+    // wrong-version / wrong-file paths → the working font-face css
+    [
+      "cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css",
+      "cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css",
+    ],
+    [
+      "cdn.jsdelivr.net/npm/vazirmatn@33.003/Vazirmatn.min.css",
+      "cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css",
+    ],
+  ];
+
+  function fixFontLinks(html) {
+    for (const [from, to] of FONT_FIXES) {
+      html = html.split(from).join(to);
+    }
+    return html;
+  }
+
+  /* ------------------------------------------------ preview */
   function isLocalRef(u) {
     return u && !/^(https?:)?\/\//i.test(u) && !u.startsWith("data:") && !u.startsWith("#");
   }
@@ -225,19 +318,23 @@ window.PFAgent = (() => {
       return files.has(p) ? `<style data-src="${p}">\n${files.get(p)}\n</style>` : tag;
     });
 
-    // inline local scripts (keep execution order)
-    html = html.replace(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>\s*<\/script>/gi, (tag, src) => {
-      if (!isLocalRef(src)) return tag;
-      const p = resolve(src);
-      if (!files.has(p)) return tag;
-      const type = (tag.match(/type\s*=\s*["']([^"']+)["']/i) || [])[1] || "";
-      const isModule = /module/i.test(type);
-      return `<script data-src="${p}"${isModule ? ' type="module"' : ""}>\n${files.get(p)}\n<\/script>`;
-    });
+    // inline local scripts (keep execution order; preserve type)
+    html = html.replace(
+      /<script\b([^>]*)\bsrc\s*=\s*["']([^"']+)["']([^>]*)>\s*<\/script>/gi,
+      (tag, pre, src, post) => {
+        if (!isLocalRef(src)) return tag;
+        const p = resolve(src);
+        if (!files.has(p)) return tag;
+        const attrs = (pre + " " + post).replace(/\b(src|type)\s*=\s*["'][^"']*["']/gi, "").trim();
+        return `<script ${attrs} data-src="${p}">\n${files.get(p)}\n<\/script>`;
+      }
+    );
 
-    // error hook right after <head> (or at top)
-    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + "\n" + ERROR_HOOK);
-    else html = ERROR_HOOK + html;
+    html = fixFontLinks(html);
+
+    // runtime shim right after <head> (or at top) — before any user script
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + "\n" + RUNTIME_SHIM);
+    else html = RUNTIME_SHIM + html;
     return html;
   }
 
@@ -272,6 +369,8 @@ window.PFAgent = (() => {
     lastPreviewHtml = html;
 
     previewErrors = [];
+    consoleLines = [];
+    renderConsole();
     $("btnFixErrors").hidden = true;
     status.hidden = false;
     status.classList.remove("ok", "err");
@@ -279,30 +378,115 @@ window.PFAgent = (() => {
 
     showEmpty(false);
     $("previewStage").hidden = false;
-    const frame = $("previewFrame");
-    frame.srcdoc = html;
 
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    const frame = $("previewFrame");
+    frame.src = previewUrl; // blob URL → real document load, scripts run
+
+    // blob documents are async — wait for the ready/first-error signal
+    waitForPreview(8000).then((ok) => {
+      if (ok) return;
+      // no signal at all: the frame may be blank/blocked. Offer a rebuild hint.
+      status.hidden = false;
+      status.classList.remove("ok");
+      status.textContent = "preview sent — no runtime signal (app may be static)";
+    });
+  }
+
+  let readyWaiter = null;
+  function waitForPreview(timeoutMs) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      };
+      const timer = setTimeout(() => done(false), timeoutMs);
+      readyWaiter = () => done(true);
+    });
   }
 
   // messages from the preview iframe
   window.addEventListener("message", (e) => {
     const d = e.data;
     if (!d || d.pf !== "preview") return;
+    if (readyWaiter) { const w = readyWaiter; readyWaiter = null; w(true); }
     const status = $("previewStatus");
     if (d.type === "error") {
       previewErrors.push(d.message);
+      pushConsole("error", d.message);
       status.classList.remove("ok");
       status.classList.add("err");
       status.textContent = "⚠ " + previewErrors.slice(-3).join("\n⚠ ");
       $("btnFixErrors").hidden = false;
+      maybeAutoFix();
+    } else if (d.type === "log") {
+      pushConsole("log", d.message);
     } else if (d.type === "ready") {
       status.classList.remove("err");
       status.classList.add("ok");
-      status.textContent = "running · " + files.size + " file(s) · " + new Date().toLocaleTimeString();
+      status.textContent =
+        "running · " + files.size + " file(s) · " + new Date().toLocaleTimeString();
+      // a clean load after a fix run clears the fix flag
+      if (autoFixInFlight && !previewErrors.length) autoFixInFlight = false;
     }
   });
+
+  /* ------------------------------------------------ console mirror */
+  function pushConsole(level, text) {
+    consoleLines.push({ level, text: String(text).slice(0, 400), at: Date.now() });
+    if (consoleLines.length > 200) consoleLines.shift();
+    renderConsole();
+  }
+
+  function renderConsole() {
+    const box = $("consoleBox");
+    if (!box) return;
+    const errCount = consoleLines.filter((l) => l.level === "error").length;
+    const badge = $("consoleCount");
+    if (badge) badge.textContent = String(errCount);
+    const cn = $("tabConsole").querySelector(".file-count");
+    if (cn) {
+      cn.textContent = String(errCount);
+      cn.classList.toggle("has-err", errCount > 0);
+    }
+    if (!consoleLines.length) {
+      box.innerHTML = '<div class="con-line muted">console is empty — no output yet.</div>';
+      return;
+    }
+    box.innerHTML = consoleLines
+      .map(
+        (l) =>
+          `<div class="con-line ${l.level}">${l.level === "error" ? "✖" : "›"} ${PFMD.esc(l.text)}</div>`
+      )
+      .join("");
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function clearConsole() {
+    consoleLines = [];
+    renderConsole();
+  }
+
+  /* ------------------------------------------------ auto-fix loop */
+  // When the preview reports errors and the agent is idle, automatically ask
+  // it to repair (max 2 auto passes per build to avoid loops).
+  function maybeAutoFix() {
+    if (autoFixInFlight || fixCount >= 2) return;
+    if (!previewErrors.length) return;
+    // wait a moment so batched errors collect first
+    clearTimeout(maybeAutoFix._t);
+    maybeAutoFix._t = setTimeout(() => {
+      if (autoFixInFlight || fixCount >= 2 || !previewErrors.length) return;
+      if (typeof PFAgent.busy === "function" && PFAgent.busy()) return;
+      autoFixInFlight = true;
+      fixCount++;
+      if (onFixRequest) onFixRequest([...new Set(previewErrors)].slice(0, 8));
+    }, 1600);
+  }
 
   /* ------------------------------------------------ zip */
   async function downloadZip() {
@@ -322,16 +506,23 @@ window.PFAgent = (() => {
 
   /* ------------------------------------------------ tabs & wiring */
   function switchTab(name) {
-    $("tabPreview").classList.toggle("active", name === "preview");
-    $("tabFiles").classList.toggle("active", name === "files");
-    $("panePreview").hidden = name !== "preview";
-    $("paneFiles").hidden = name !== "files";
+    for (const t of ["preview", "files", "console"]) {
+      $("tab" + t[0].toUpperCase() + t.slice(1)).classList.toggle("active", name === t);
+      $("pane" + t[0].toUpperCase() + t.slice(1)).hidden = name !== t;
+    }
   }
 
   function init() {
     $("tabPreview").addEventListener("click", () => switchTab("preview"));
     $("tabFiles").addEventListener("click", () => switchTab("files"));
-    $("btnRefreshPreview").addEventListener("click", () => { lastPreviewHtml = null; buildPreview(); });
+    $("tabConsole").addEventListener("click", () => switchTab("console"));
+    $("btnRefreshPreview").addEventListener("click", () => {
+      lastPreviewHtml = null;
+      fixCount = 0;
+      previewErrors = [];
+      renderConsole();
+      buildPreview();
+    });
     $("btnZip").addEventListener("click", downloadZip);
     $("btnOpenPreview").addEventListener("click", () => {
       if (previewUrl) window.open(previewUrl, "_blank");
@@ -344,9 +535,12 @@ window.PFAgent = (() => {
       } catch { /* clipboard unavailable */ }
     });
     $("btnCloseFile").addEventListener("click", closeFile);
+    $("btnClearConsole").addEventListener("click", clearConsole);
     $("btnFixErrors").addEventListener("click", () => {
       if (onFixRequest && previewErrors.length) {
         const errs = [...new Set(previewErrors)].slice(0, 8);
+        autoFixInFlight = true;
+        fixCount++;
         onFixRequest(errs);
       }
     });
@@ -374,14 +568,18 @@ window.PFAgent = (() => {
 
     renderTree();
     renderFileView();
+    renderConsole();
   }
 
   document.addEventListener("DOMContentLoaded", init);
 
   return {
     ingest, reset, getFiles, setFiles, parseFiles, buildPreview, switchTab, openFile,
+    pushConsole,
     get errors() { return previewErrors; },
     set onFixRequest(fn) { onFixRequest = fn; },
     openMobile() { $("bench").classList.add("mobile-open"); },
+    setBusy(on) { autoFixInFlight = !!on; },
+    busy() { return autoFixInFlight; },
   };
 })();

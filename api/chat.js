@@ -1,6 +1,7 @@
 // POST /api/chat — SSE streaming chat endpoint (modes: chat | agent).
+// engines: "max" (strongest brain, reasoning high) | "code" (coding specialists).
 
-import { generateAnswer, getRoster } from "./_lib/providers.js";
+import { generateAnswer } from "./_lib/providers.js";
 import { chatSystemPrompt, agentSystemPrompt, filesContextMessage } from "./_lib/brain.js";
 import { searchWeb, searchContext } from "./_lib/search.js";
 import { sseSend } from "./_lib/util.js";
@@ -48,6 +49,22 @@ async function readBody(req) {
   }
 }
 
+/** Parse ```file:path blocks from agent output (for completeness checks). */
+function parseFileBlocks(text) {
+  const out = [];
+  const re = /```file:([^\n`]+)\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(text))) out.push({ path: m[1].trim(), content: m[2] });
+  // trailing unclosed block (stream ended mid-file)
+  const tail = /```file:([^\n`]+)\n([\s\S]*)$/.exec(
+    text.replace(/```file:[^\n`]+\n[\s\S]*?```/g, "")
+  );
+  if (tail) out.push({ path: tail[1].trim(), content: tail[2], truncated: true });
+  return out;
+}
+
+const isEmptyFile = (f) => !f.content || f.content.replace(/\s/g, "").length < 5;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "method-not-allowed" });
@@ -56,6 +73,7 @@ export default async function handler(req, res) {
 
   const body = await readBody(req);
   const mode = body.mode === "agent" ? "agent" : "chat";
+  const engine = body.engine === "code" ? "code" : "max"; // quality-first default
   const messages = sanitizeMessages(body.messages);
   if (!messages.length || messages[messages.length - 1].role !== "user") {
     res.status(400).json({ error: "no-user-message" });
@@ -117,35 +135,72 @@ export default async function handler(req, res) {
     let result = await generateAnswer({
       messages: finalMessages,
       mode,
+      engine,
       signal: abort.signal,
       onDelta: delta,
       onStatus: status,
     });
 
-    // Agent contract enforcement: zero file blocks → one repair pass that
-    // re-emits the same solution in the strict ```file: format.
-    if (mode === "agent" && !/```file:[^\n`]+\n[\s\S]*?```/.test(result.text)) {
-      status("مرتب‌سازی خروجی به فرمت فایل…");
-      const repair = [
-        ...finalMessages,
-        { role: "assistant", content: result.text },
-        {
-          role: "user",
-          content:
-            "STOP. You violated the output contract: zero ```file:<path> blocks " +
-            "were emitted. Re-emit the ENTIRE solution again strictly as " +
-            "```file:<path> fenced blocks — complete files, entry point " +
-            "index.html. Same content, correct format, no apologies.",
-        },
-      ];
-      delta("\n\n---\n\n");
-      result = await generateAnswer({
-        messages: repair,
-        mode,
-        signal: abort.signal,
-        onDelta: delta,
-        onStatus: status,
-      });
+    // ---- Agent contract enforcement ----
+    if (mode === "agent") {
+      const blocks = parseFileBlocks(result.text);
+
+      // A) zero file blocks → one repair pass re-emitting the solution
+      if (!blocks.some((b) => !b.truncated)) {
+        status("مرتب‌سازی خروجی به فرمت فایل…");
+        const repair = [
+          ...finalMessages,
+          { role: "assistant", content: result.text },
+          {
+            role: "user",
+            content:
+              "STOP. You violated the output contract: zero complete " +
+              "```file:<path> blocks were emitted. Re-emit the ENTIRE solution " +
+              "again strictly as ```file:<path> fenced blocks — complete files, " +
+              "entry point index.html. Same content, correct format, no apologies.",
+          },
+        ];
+        delta("\n\n---\n\n");
+        result = await generateAnswer({
+          messages: repair,
+          mode,
+          engine,
+          signal: abort.signal,
+          onDelta: delta,
+          onStatus: status,
+        });
+      }
+
+      // B) empty or truncated files → demand the missing content, verbatim
+      const bad = parseFileBlocks(result.text).filter(
+        (b) => isEmptyFile(b) || b.truncated
+      );
+      if (bad.length) {
+        const list = [...new Set(bad.map((b) => b.path))];
+        status("تکمیل فایل‌های ناقص…");
+        const fill = [
+          ...finalMessages,
+          { role: "assistant", content: result.text },
+          {
+            role: "user",
+            content:
+              "These files were emitted EMPTY or cut off before completion: " +
+              list.map((p) => `\`${p}\``).join(", ") +
+              ". Re-emit each of them COMPLETELY, full working content, no " +
+              "truncation, no placeholders, no comments like 'rest of code'. " +
+              "Emit ONLY these files as ```file:<path> blocks.",
+          },
+        ];
+        delta("\n\n---\n\n");
+        result = await generateAnswer({
+          messages: fill,
+          mode,
+          engine,
+          signal: abort.signal,
+          onDelta: delta,
+          onStatus: status,
+        });
+      }
     }
 
     sseSend(res, {

@@ -3,7 +3,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");
@@ -42,7 +42,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     try {
-      const mod = await import(file + "?t=" + Date.now());
+      const mod = await import(pathToFileURL(file).href + "?t=" + Date.now());
       req.query = Object.fromEntries(url.searchParams);
       req.body = null;
       await mod.default(req, res);

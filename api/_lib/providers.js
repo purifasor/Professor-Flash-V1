@@ -1,12 +1,16 @@
 // Provider chain for Professor Flash.
 // Free, keyless OpenAI-compatible providers, read live from brain/models.json.
-// Strategy: race small batches of strong models (streaming, first-token wins),
-// fall back to non-streaming calls, never leave the user with a dead-end.
+// Strategy: ordered attempts with the strongest brain model FIRST (quality
+// over speed), then coding specialists, then cross-provider fallbacks —
+// never leave the user with a dead-end.
 //
-// Hybrid-reasoning models (Nemotron, MiniMax, Step, …) leak chain-of-thought
-// into `content` unless told otherwise — providers with `reasoningOff: true`
-// get `reasoning: {enabled:false}` injected. A few models MANDATE reasoning;
-// those are auto-retried once with `reasoning: {effort:"low"}` and remembered.
+// `engine` selects the thinking mode:
+//  - "max"  → reasoning: {effort:"high"} on the strongest brain slots; leaked
+//             <think> spans are stripped by the streaming filter.
+//  - "code" → coding-tuned roster with reasoning off (or effort:low where the
+//             model mandates reasoning).
+// A few models MANDATE reasoning; those are auto-retried once with
+// `reasoning:{effort:"low"}` and remembered.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -25,26 +29,20 @@ const FALLBACK_ROSTER = {
       label: "Kilo Gateway",
       url: "https://api.kilo.ai/api/gateway/chat/completions",
       type: "openai",
-      reasoningOff: true,
+      brain: ["nvidia/nemotron-3-ultra-550b-a55b:free"],
       chat: [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "dots-studio/dots-3-note-preview:free",
-        "minimax/minimax-m3:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "minimax/minimax-m2.7:free",
-        "stepfun/step-3.7-flash:free",
         "nvidia/nemotron-3.5-lightning:free",
+        "stepfun/step-3.7-flash:free",
         "thinkingmachines/inkling:free",
       ],
       agent: [
-        "poolside/laguna-s-2.1:free",
         "cohere/north-mini-code:free",
-        "poolside/laguna-xs-2.1:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "stepfun/step-3.7-flash:free",
+        "poolside/laguna-s-2.1:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "dots-studio/dots-3-note-preview:free",
-        "minimax/minimax-m3:free",
+        "stepfun/step-3.7-flash:free",
       ],
     },
     {
@@ -52,12 +50,8 @@ const FALLBACK_ROSTER = {
       label: "OVHcloud AI",
       url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       type: "openai",
-      chat: [
-        "gpt-oss-120b",
-        "Meta-Llama-3_3-70B-Instruct",
-        "Qwen3-32B",
-        "Mistral-Small-3.2-24B-Instruct-2506",
-      ],
+      brain: ["gpt-oss-120b"],
+      chat: ["gpt-oss-120b", "Qwen3-32B", "Meta-Llama-3_3-70B-Instruct"],
       agent: [
         "Qwen3-Coder-30B-A3B-Instruct",
         "gpt-oss-120b",
@@ -70,15 +64,16 @@ const FALLBACK_ROSTER = {
       label: "Pollinations",
       url: "https://text.pollinations.ai/openai",
       type: "openai",
+      reasoningOff: false,
       chat: ["openai-fast"],
       agent: ["openai-fast"],
     },
   ],
   limits: {
     chatMaxTokens: 4096,
-    agentMaxTokens: 16384,
-    firstTokenDeadlineMs: 22000,
-    batchSize: 2,
+    agentMaxTokens: 30000,
+    firstTokenDeadlineMs: 45000,
+    batchSize: 1,
     temperatureChat: 0.7,
     temperatureAgent: 0.3,
   },
@@ -124,7 +119,7 @@ function cool(key, secs) {
 }
 
 // ---------------------------------------------------- reasoning-param memory
-// Models that reject reasoning:{enabled:false} ("mandatory") get effort:low.
+// Models that reject reasoning params ("mandatory") get effort:low.
 const REASONING_LOW = new Set();
 
 function isReasoningMandatoryError(text) {
@@ -132,16 +127,22 @@ function isReasoningMandatoryError(text) {
   return s.includes("reasoning is mandatory") || s.includes("cannot be disabled");
 }
 
-function reasoningParam(prov, model) {
-  if (!prov.reasoningOff) return null;
+function reasoningParam(prov, model, engine) {
+  if (prov.reasoningOff === false) return null; // provider wants raw params
+  if (engine === "max") {
+    // quality-first: ask the strongest brain to actually think
+    return REASONING_LOW.has(`${prov.id}:${model}`)
+      ? { effort: "low" }
+      : { effort: "high" };
+  }
   return REASONING_LOW.has(`${prov.id}:${model}`)
     ? { effort: "low" }
     : { enabled: false };
 }
 
-function buildBody(prov, model, base) {
+function buildBody(prov, model, base, engine) {
   const body = { ...base, model };
-  const r = reasoningParam(prov, model);
+  const r = reasoningParam(prov, model, engine);
   if (r) body.reasoning = r;
   return body;
 }
@@ -151,13 +152,13 @@ function buildBody(prov, model, base) {
  * One streaming attempt. Yields content deltas only (reasoning dropped).
  * Throws before first yield when the provider fails / is rate-limited.
  */
-async function* streamOpenAI({ prov, model, body, signal }) {
+async function* streamOpenAI({ prov, model, body, engine, signal }) {
   const res = await fetchTimeout(
     prov.url,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify(buildBody(prov, model, { ...body, stream: true })),
+      body: JSON.stringify(buildBody(prov, model, { ...body, stream: true }, engine)),
       signal,
     },
     60000
@@ -210,7 +211,7 @@ async function* streamOpenAI({ prov, model, body, signal }) {
 }
 
 // Race `models` (same provider): first to emit a content delta wins.
-async function raceStreaming(prov, models, body, { deadlineMs, signal }, onDelta) {
+async function raceStreaming(prov, models, body, { deadlineMs, signal, engine }, onDelta) {
   const ctrls = models.map(() => new AbortController());
   const onOuter = () => ctrls.forEach((c) => c.abort());
   if (signal) {
@@ -218,7 +219,7 @@ async function raceStreaming(prov, models, body, { deadlineMs, signal }, onDelta
     else signal.addEventListener("abort", onOuter, { once: true });
   }
   const gens = models.map((m, i) =>
-    streamOpenAI({ prov, model: m, body, signal: ctrls[i].signal })
+    streamOpenAI({ prov, model: m, body, engine, signal: ctrls[i].signal })
   );
   const pending = new Map();
   gens.forEach((g, i) =>
@@ -275,13 +276,13 @@ async function raceStreaming(prov, models, body, { deadlineMs, signal }, onDelta
 }
 
 // ---------------------------------------------------------- non-stream try
-async function completeOpenAI({ prov, model, body, signal, timeoutMs = 55000 }) {
+async function completeOpenAI({ prov, model, body, engine, signal, timeoutMs = 55000 }) {
   const res = await fetchTimeout(
     prov.url,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildBody(prov, model, { ...body, stream: false })),
+      body: JSON.stringify(buildBody(prov, model, { ...body, stream: false }, engine)),
       signal,
     },
     timeoutMs
@@ -305,6 +306,11 @@ async function completeOpenAI({ prov, model, body, signal, timeoutMs = 55000 }) 
 }
 
 // ------------------------------------------------------------------ engine
+function modelsFor(prov, mode, engine) {
+  if (engine === "max" && Array.isArray(prov.brain) && prov.brain.length) return prov.brain;
+  return (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
+}
+
 /**
  * Generate an answer. Calls onDelta(text) as content streams in and
  * onStatus(faText) as the engine moves through providers.
@@ -313,6 +319,7 @@ async function completeOpenAI({ prov, model, body, signal, timeoutMs = 55000 }) 
 export async function generateAnswer({
   messages,
   mode = "chat",
+  engine = "max",
   signal,
   onDelta = () => {},
   onStatus = () => {},
@@ -327,11 +334,11 @@ export async function generateAnswer({
   let collected = "";
 
   for (const prov of roster.providers) {
-    const models = (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
+    const models = modelsFor(prov, mode, engine);
     const usable = models.filter((m) => !cooled(`${prov.id}:${m}`));
     const list = usable.length ? usable : models; // all cooled → try anyway
 
-    // 1) streaming races in batches
+    // 1) streaming attempts, ordered strongest-first (batch = 1 → quality first)
     for (let i = 0; i < list.length; i += L.batchSize) {
       const batch = list.slice(i, i + L.batchSize);
       onStatus(statusFor(prov, batch));
@@ -341,7 +348,7 @@ export async function generateAnswer({
           prov,
           batch,
           body,
-          { deadlineMs: L.firstTokenDeadlineMs, signal },
+          { deadlineMs: L.firstTokenDeadlineMs, signal, engine },
           (d) => {
             collected += d;
             onDelta(d);
@@ -353,7 +360,7 @@ export async function generateAnswer({
         batch.forEach((m) => cool(`${prov.id}:${m}`, 20));
       } catch (e) {
         errors.push(`${prov.id}/${batch.join(",")}: ${e.message}`);
-        if (e.reasoningMandatory && prov.reasoningOff) {
+        if (e.reasoningMandatory && prov.reasoningOff !== false) {
           // remember & immediately retry this batch with effort:low
           batch.forEach((m) => REASONING_LOW.add(`${prov.id}:${m}`));
           i -= L.batchSize;
@@ -370,7 +377,7 @@ export async function generateAnswer({
       if (cooled(`${prov.id}:${m}`)) continue;
       onStatus(statusFor(prov, [m]));
       try {
-        const r = await completeOpenAI({ prov, model: m, body, signal });
+        const r = await completeOpenAI({ prov, model: m, body, engine, signal });
         for (const piece of splitChunks(r.text)) {
           onDelta(piece);
           await sleep(6);
@@ -378,10 +385,10 @@ export async function generateAnswer({
         return { text: r.text, providerLabel: prov.label, model: r.routedModel };
       } catch (e) {
         errors.push(`${prov.id}/${m}: ${e.message}`);
-        if (e.message === "reasoning-mandatory" && prov.reasoningOff) {
+        if (e.message === "reasoning-mandatory" && prov.reasoningOff !== false) {
           REASONING_LOW.add(`${prov.id}:${m}`);
           try {
-            const r2 = await completeOpenAI({ prov, model: m, body, signal });
+            const r2 = await completeOpenAI({ prov, model: m, body, engine, signal });
             for (const piece of splitChunks(r2.text)) {
               onDelta(piece);
               await sleep(6);
@@ -394,6 +401,36 @@ export async function generateAnswer({
           continue;
         }
         cool(`${prov.id}:${m}`, e.message === "rate-limited" ? 45 : 15);
+      }
+    }
+  }
+
+  // 3) absolute fallback: full mode roster ignoring the engine selection
+  if (engine === "max") {
+    for (const prov of roster.providers) {
+      const models = (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
+      for (const m of models) {
+        if (cooled(`${prov.id}:${m}`)) continue;
+        onStatus(statusFor(prov, [m]));
+        try {
+          collected = "";
+          const win = await raceStreaming(
+            prov,
+            [m],
+            body,
+            { deadlineMs: L.firstTokenDeadlineMs, signal, engine: "code" },
+            (d) => {
+              collected += d;
+              onDelta(d);
+            }
+          );
+          if (win && collected.trim()) {
+            return { text: collected, providerLabel: prov.label, model: win.model };
+          }
+        } catch (e) {
+          errors.push(`${prov.id}/${m}(fallback): ${e.message}`);
+          cool(`${prov.id}:${m}`, /rate-limit/.test(e.message) ? 45 : 15);
+        }
       }
     }
   }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/chat.js": { "maxDuration": 300 },
+    "api/chat.js": { "maxDuration": 300, "includeFiles": "brain/**" },
     "api/search.js": { "maxDuration": 30 },
     "api/models.js": { "maxDuration": 10 }
   }
