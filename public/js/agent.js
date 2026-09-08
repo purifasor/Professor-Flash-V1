@@ -1,14 +1,13 @@
-// Agent workbench v2: virtual file system, stable blob preview (no srcdoc),
+// Agent workbench v3: virtual file system, stable blob preview (no srcdoc),
 // sandbox-tolerant localStorage shim, live console mirror, auto-fix loop,
 // auto-open files/preview after builds, closable file viewer, ZIP export.
 //
-// Preview stability: the app runs inside a sandboxed <iframe>. Two invariants:
-//  1. Content is served via blob: URL (fresh URL per build) so the document
-//     gets a real origin context; `<a download>` / window.open still work
-//     thanks to allow-downloads/allow-popups.
-//  2. localStorage/sessionStorage are inaccessible under
-//     allow-same-origin-less sandboxes — a tiny inline shim is injected BEFORE
-//     any user script so persisted apps run unmodified.
+// v3 upgrades:
+//  - preview iframe is scaled to FIT the stage (content never overflows
+//    the frame — responsive on every screen)
+//  - device switcher keeps real viewport widths (desktop/tablet/mobile)
+//  - console shows logs + errors + a "no signal" detector
+//  - auto-fix tolerates busy agent (queues instead of looping)
 window.PFAgent = (() => {
   const $ = (id) => document.getElementById(id);
   const files = new Map(); // path -> content
@@ -21,6 +20,7 @@ window.PFAgent = (() => {
   let previewTimer = null;
   let autoFixInFlight = false;
   let fixCount = 0;
+  let busyFlag = false;
 
   /* ------------------------------------------------ parsing */
   function parseFiles(text, { final = false } = {}) {
@@ -86,6 +86,7 @@ window.PFAgent = (() => {
     lastPreviewHtml = null;
     fixCount = 0;
     autoFixInFlight = false;
+    busyFlag = false;
     clearTimeout(previewTimer);
     const frame = $("previewFrame");
     try { frame.src = "about:blank"; } catch { /* noop */ }
@@ -120,7 +121,7 @@ window.PFAgent = (() => {
   }
 
   /* ------------------------------------------------ tree + viewer */
-  const ICONS = { html: "🌐", css: "🎨", js: "⚙️", json: "🧾", md: "📝", svg: "🖼", png: "🖼", jpg: "🖼", txt: "📄" };
+  const ICONS = { html: "🌐", css: "🎨", js: "⚙️", json: "🧾", md: "📝", svg: "🖼", png: "🖼", jpg: "🖼", txt: "📄", py: "🐍", cpp: "⚙️", ts: "⚙️" };
   const iconFor = (p) => ICONS[(p.split(".").pop() || "").toLowerCase()] || "📄";
 
   function renderTree() {
@@ -343,6 +344,22 @@ window.PFAgent = (() => {
     previewTimer = setTimeout(buildPreview, 900);
   }
 
+  /** Fit the device frame to the stage — content always inside the box. */
+  function fitPreview() {
+    const stage = $("previewStage");
+    const device = stage.querySelector(".preview-device");
+    if (!stage || !device || stage.hidden) return;
+    const d = stage.dataset.device || "desktop";
+    const pad = 32;
+    const availW = stage.clientWidth - pad;
+    const availH = stage.clientHeight - pad;
+    let targetW = Math.max(320, availW); // desktop fills
+    if (d === "tablet") targetW = Math.min(820, availW);
+    if (d === "mobile") targetW = Math.min(390, availW);
+    device.style.width = Math.floor(targetW) + "px";
+    device.style.height = Math.floor(Math.max(240, availH)) + "px";
+  }
+
   function buildPreview() {
     clearTimeout(previewTimer);
     const html = buildHtml();
@@ -364,6 +381,7 @@ window.PFAgent = (() => {
     if (html === lastPreviewHtml) {
       showEmpty(false);
       $("previewStage").hidden = false;
+      fitPreview();
       return;
     }
     lastPreviewHtml = html;
@@ -378,6 +396,7 @@ window.PFAgent = (() => {
 
     showEmpty(false);
     $("previewStage").hidden = false;
+    fitPreview();
 
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
@@ -446,15 +465,18 @@ window.PFAgent = (() => {
     const box = $("consoleBox");
     if (!box) return;
     const errCount = consoleLines.filter((l) => l.level === "error").length;
+    const logCount = consoleLines.length - errCount;
     const badge = $("consoleCount");
-    if (badge) badge.textContent = String(errCount);
+    if (badge) {
+      badge.textContent = consoleLines.length ? String(consoleLines.length) : "0";
+    }
     const cn = $("tabConsole").querySelector(".file-count");
     if (cn) {
-      cn.textContent = String(errCount);
+      cn.textContent = errCount ? String(errCount) : (logCount ? String(logCount) : "0");
       cn.classList.toggle("has-err", errCount > 0);
     }
     if (!consoleLines.length) {
-      box.innerHTML = '<div class="con-line muted">console is empty — no output yet.</div>';
+      box.innerHTML = '<div class="con-line muted">کنسول خالی است — خروجی برنامه این‌جا نمایش داده می‌شود.</div>';
       return;
     }
     box.innerHTML = consoleLines
@@ -473,7 +495,8 @@ window.PFAgent = (() => {
 
   /* ------------------------------------------------ auto-fix loop */
   // When the preview reports errors and the agent is idle, automatically ask
-  // it to repair (max 2 auto passes per build to avoid loops).
+  // it to repair (max 2 auto passes per build to avoid loops). If the agent
+  // is busy, wait for it to finish — the fix request is not lost.
   function maybeAutoFix() {
     if (autoFixInFlight || fixCount >= 2) return;
     if (!previewErrors.length) return;
@@ -481,7 +504,11 @@ window.PFAgent = (() => {
     clearTimeout(maybeAutoFix._t);
     maybeAutoFix._t = setTimeout(() => {
       if (autoFixInFlight || fixCount >= 2 || !previewErrors.length) return;
-      if (typeof PFAgent.busy === "function" && PFAgent.busy()) return;
+      if (busyFlag) {
+        // agent busy — retry after it finishes (poll, don't drop the fix)
+        maybeAutoFix._t = setTimeout(maybeAutoFix, 1500);
+        return;
+      }
       autoFixInFlight = true;
       fixCount++;
       if (onFixRequest) onFixRequest([...new Set(previewErrors)].slice(0, 8));
@@ -510,6 +537,7 @@ window.PFAgent = (() => {
       $("tab" + t[0].toUpperCase() + t.slice(1)).classList.toggle("active", name === t);
       $("pane" + t[0].toUpperCase() + t.slice(1)).hidden = name !== t;
     }
+    if (name === "preview") fitPreview();
   }
 
   function init() {
@@ -537,7 +565,7 @@ window.PFAgent = (() => {
     $("btnCloseFile").addEventListener("click", closeFile);
     $("btnClearConsole").addEventListener("click", clearConsole);
     $("btnFixErrors").addEventListener("click", () => {
-      if (onFixRequest && previewErrors.length) {
+      if (onFixRequest && previewErrors.length && !busyFlag) {
         const errs = [...new Set(previewErrors)].slice(0, 8);
         autoFixInFlight = true;
         fixCount++;
@@ -546,15 +574,20 @@ window.PFAgent = (() => {
     });
     $("benchFab").addEventListener("click", () => {
       $("bench").classList.toggle("mobile-open");
+      fitPreview();
     });
 
-    // device size switcher
+    // device size switcher + responsive fit
     $("devSwitch").querySelectorAll(".dev-btn").forEach((b) =>
       b.addEventListener("click", () => {
         $("devSwitch").querySelectorAll(".dev-btn").forEach((x) => x.classList.toggle("active", x === b));
         $("previewStage").dataset.device = b.dataset.device;
+        fitPreview();
       })
     );
+    window.addEventListener("resize", () => {
+      if (!$("previewStage").hidden) fitPreview();
+    });
 
     // Esc closes the open file (and the mobile workbench)
     document.addEventListener("keydown", (e) => {
@@ -575,11 +608,11 @@ window.PFAgent = (() => {
 
   return {
     ingest, reset, getFiles, setFiles, parseFiles, buildPreview, switchTab, openFile,
-    pushConsole,
+    pushConsole, fitPreview,
     get errors() { return previewErrors; },
     set onFixRequest(fn) { onFixRequest = fn; },
-    openMobile() { $("bench").classList.add("mobile-open"); },
-    setBusy(on) { autoFixInFlight = !!on; },
-    busy() { return autoFixInFlight; },
+    openMobile() { $("bench").classList.add("mobile-open"); fitPreview(); },
+    setBusy(on) { busyFlag = !!on; autoFixInFlight = !!on ? autoFixInFlight : false; },
+    busy() { return busyFlag; },
   };
 })();

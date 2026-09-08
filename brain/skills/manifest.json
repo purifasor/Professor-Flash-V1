@@ -1,0 +1,28 @@
+{
+  "$comment": "Professor Flash V1 — skill & knowledge bank manifest. api/_lib/brain.js loads EVERY file listed here (hot-reloaded from GitHub, 5-min cache). Any model/provider connected in the future gets the same brain: skills are plain markdown, organized by domain, and auto-composed into the system prompt. To extend the brain: add a .md file under skills/ or knowledge/ and register it here — no code changes needed.",
+  "skills": [
+    "reasoning",
+    "coding",
+    "debugging",
+    "game-engineering",
+    "design",
+    "research",
+    "communication"
+  ],
+  "knowledge": [
+    "design-tokens",
+    "web-dev",
+    "persian"
+  ],
+  "routing": {
+    "$comment": "Optional per-mode skill emphasis. Keys are substrings matched against the user's latest message (first match wins). Matched skills are ALWAYS included; unmatched ones included as space allows. This is how any connected model 'actually uses' the skill bank.",
+    "rules": [
+      { "match": ["بازی", "game", "کنتر", "شوتر", "فقط اول شخص", "3d", "۳بعدی", "three"], "skills": ["game-engineering", "debugging", "design", "coding"] },
+      { "match": ["باگ", "bug", "خطا", "error", "دیباگ", "debug", "کار نمیکنه", "کار نمی‌کنه", "لود نشده", "خالیه", "اصلاح", "fix"], "skills": ["debugging", "coding"] },
+      { "match": ["طراحی", "ui", "ظاهر", "تم", "رنگ", "انیمیشن", "قشنگ", "زیبا"], "skills": ["design", "coding"] },
+      { "match": ["قیمت", "دلار", "بیت کوین", "ارز", "بورس", "تومن", "تومان", "نوسان", "crypto", "price"], "skills": ["research"] },
+      { "match": ["ساخت", "بساز", "کد", "برنامه", "اپ", "سایت", "وبسایت", "build", "app", "site", "code"], "skills": ["coding", "design", "debugging"] }
+    ],
+    "default": ["reasoning", "communication"]
+  }
+}

@@ -649,6 +649,59 @@ img { display: block; max-width: 100%; }
 }
 .file-chip:hover { border-color: var(--border-red); box-shadow: 0 0 12px -3px var(--red-glow); transform: translateY(-1px); }
 
+/* ===================== agent HUD (build process box) ===================== */
+.agent-hud {
+  margin: 2px 0 12px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, rgba(255, 59, 48, 0.07), rgba(10, 9, 8, 0.6));
+  border: 1px solid var(--border-red-soft);
+  border-radius: 12px;
+  box-shadow: var(--neu-sm);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.hud-row { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--text-2); }
+.hud-spinner {
+  width: 13px; height: 13px; flex: 0 0 auto;
+  border: 2px solid var(--border-red);
+  border-top-color: var(--red);
+  border-radius: 50%;
+  animation: hudSpin 0.8s linear infinite;
+}
+@keyframes hudSpin { to { transform: rotate(360deg); } }
+.hud-files { display: flex; flex-wrap: wrap; gap: 5px; }
+.hud-file {
+  padding: 2px 9px;
+  font-size: 10.5px; font-family: var(--mono);
+  direction: ltr;
+  color: var(--red-hot);
+  background: rgba(255, 59, 48, 0.10);
+  border: 1px solid var(--border-red-soft);
+  border-radius: 6px;
+  animation: chipIn 0.3s var(--ease) both;
+}
+@keyframes chipIn {
+  from { opacity: 0; transform: translateY(4px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ===================== mermaid diagrams ===================== */
+.mermaid-box {
+  margin: 12px 0;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--neu-sm);
+  overflow-x: auto;
+  text-align: center;
+  animation: msgIn 0.35s var(--ease) both;
+}
+.mermaid-box svg { max-width: 100%; height: auto; }
+.mermaid-fallback {
+  padding: 12px; font-family: var(--mono); font-size: 12px;
+  color: var(--text-2); white-space: pre-wrap;
+}
+
 /* status line while connecting */
 .status-line {
   display: flex; align-items: center; gap: 9px;
@@ -888,8 +941,6 @@ img { display: block; max-width: 100%; }
   box-shadow: var(--neu), 0 0 40px -12px rgba(255, 59, 48, 0.25);
   transition: width 0.3s var(--ease);
 }
-.preview-stage[data-device="tablet"] .preview-device { width: 820px; max-width: 100%; }
-.preview-stage[data-device="mobile"] .preview-device { width: 390px; max-width: 100%; }
 /* cybercore corner brackets */
 .preview-device::before,
 .preview-device::after {

@@ -15,3 +15,6 @@
 - Accessibility: contrast ≥ 4.5:1 for text, visible focus rings, sensible
   touch targets (≥ 40px), semantic HTML.
 - Persian/RTL: mirror layouts, keep numerals/latin-code LTR, use Vazirmatn.
+- Product thinking: when describing a site/app structure, also cover its
+  content architecture (sections, copy hierarchy, CTA placement), not just
+  the visual shell.

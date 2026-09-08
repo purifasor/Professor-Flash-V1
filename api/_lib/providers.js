@@ -1,16 +1,28 @@
-// Provider chain for Professor Flash.
+// Provider chain for Professor Flash V1.
 // Free, keyless OpenAI-compatible providers, read live from brain/models.json.
 // Strategy: ordered attempts with the strongest brain model FIRST (quality
 // over speed), then coding specialists, then cross-provider fallbacks —
 // never leave the user with a dead-end.
 //
 // `engine` selects the thinking mode:
-//  - "max"  → reasoning: {effort:"high"} on the strongest brain slots; leaked
-//             <think> spans are stripped by the streaming filter.
-//  - "code" → coding-tuned roster with reasoning off (or effort:low where the
-//             model mandates reasoning).
+//  - "max"  -> reasoning: {effort:"high"} on the strongest brain slots; leaked
+//              think spans are stripped by the streaming filter.
+//  - "code" -> coding-tuned roster with reasoning off (or effort:low where the
+//              model mandates reasoning).
 // A few models MANDATE reasoning; those are auto-retried once with
 // `reasoning:{effort:"low"}` and remembered.
+//
+// STACK MODE (ensemble fusion): instead of sending the same text separately
+// to each model, the answer is built as a pipeline over the strongest brains:
+//   Stage A (drafter)  -> produces the best full draft.
+//   Stage B (refiner)  -> a second strong model re-reads the draft together
+//                        with the original request and returns an improved
+//                        final answer (correct errors, deepen reasoning,
+//                        tighten prose). If the refiner fails, the draft stands.
+// The models "stack": every stage sees and builds on the previous one's work,
+// so their capabilities fuse into one answer rather than running in parallel
+// isolation. Aggregation is sequential & depth-first to stay within free
+// rate limits, while the user watches streamed deltas from the winning stage.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -76,6 +88,7 @@ const FALLBACK_ROSTER = {
     batchSize: 1,
     temperatureChat: 0.7,
     temperatureAgent: 0.3,
+    stack: true,
   },
 };
 
@@ -311,39 +324,38 @@ function modelsFor(prov, mode, engine) {
   return (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
 }
 
-/**
- * Generate an answer. Calls onDelta(text) as content streams in and
- * onStatus(faText) as the engine moves through providers.
- * Returns { text, providerLabel, model }.
- */
-export async function generateAnswer({
-  messages,
-  mode = "chat",
-  engine = "max",
-  signal,
-  onDelta = () => {},
-  onStatus = () => {},
-}) {
-  const roster = getRoster();
+function statusFor(prov, batch) {
+  const names = batch.map(shortModel).join(" ، ");
+  return `اتصال به ${prov.label} (${names})…`;
+}
+
+function shortModel(id) {
+  return String(id).split("/").pop().replace(/:free$/, "");
+}
+
+function* splitChunks(text, size = 28) {
+  for (let i = 0; i < text.length; i += size) yield text.slice(i, i + size);
+}
+
+/** Core single-pass generation used by both stack stages and plain mode. */
+async function onePass({ messages, mode, engine, roster, signal, onDelta, onStatus }) {
   const L = roster.limits;
   const maxTokens = mode === "agent" ? L.agentMaxTokens : L.chatMaxTokens;
   const temperature = mode === "agent" ? L.temperatureAgent : L.temperatureChat;
   const body = { messages, temperature, max_tokens: maxTokens };
-
   const errors = [];
-  let collected = "";
 
   for (const prov of roster.providers) {
     const models = modelsFor(prov, mode, engine);
     const usable = models.filter((m) => !cooled(`${prov.id}:${m}`));
-    const list = usable.length ? usable : models; // all cooled → try anyway
+    const list = usable.length ? usable : models; // all cooled -> try anyway
 
-    // 1) streaming attempts, ordered strongest-first (batch = 1 → quality first)
+    // 1) streaming attempts, ordered strongest-first (batch = 1 -> quality first)
     for (let i = 0; i < list.length; i += L.batchSize) {
       const batch = list.slice(i, i + L.batchSize);
       onStatus(statusFor(prov, batch));
       try {
-        collected = "";
+        let collected = "";
         const win = await raceStreaming(
           prov,
           batch,
@@ -405,50 +417,113 @@ export async function generateAnswer({
     }
   }
 
-  // 3) absolute fallback: full mode roster ignoring the engine selection
-  if (engine === "max") {
-    for (const prov of roster.providers) {
-      const models = (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
-      for (const m of models) {
-        if (cooled(`${prov.id}:${m}`)) continue;
-        onStatus(statusFor(prov, [m]));
-        try {
-          collected = "";
-          const win = await raceStreaming(
-            prov,
-            [m],
-            body,
-            { deadlineMs: L.firstTokenDeadlineMs, signal, engine: "code" },
-            (d) => {
-              collected += d;
-              onDelta(d);
-            }
-          );
-          if (win && collected.trim()) {
-            return { text: collected, providerLabel: prov.label, model: win.model };
-          }
-        } catch (e) {
-          errors.push(`${prov.id}/${m}(fallback): ${e.message}`);
-          cool(`${prov.id}:${m}`, /rate-limit/.test(e.message) ? 45 : 15);
-        }
-      }
-    }
-  }
-
   const err = new Error("all-providers-failed");
   err.details = errors.slice(-8);
   throw err;
 }
 
-function statusFor(prov, batch) {
-  const names = batch.map(shortModel).join(" ، ");
-  return `اتصال به ${prov.label} (${names})…`;
-}
+const REFINE_SYSTEM =
+  "You are the Refiner stage of the Professor Stack. You receive a draft " +
+  "answer that another strong model produced for the user's request, " +
+  "together with the original conversation. Your job: return the FINAL answer " +
+  "the user deserves. Fix any errors, factual slips, or inconsistencies in " +
+  "the draft; deepen the reasoning where it is shallow; tighten the language; " +
+  "keep the good parts. Preserve the user's language exactly (Persian in -> " +
+  "Persian out). Do not add meta commentary about drafts or stages — emit " +
+  "only the final answer itself, ready to send to the user. If the draft is " +
+  "already excellent, improve its clarity and precision and return it.";
 
-function shortModel(id) {
-  return String(id).split("/").pop().replace(/:free$/, "");
-}
+/**
+ * Generate an answer. Calls onDelta(text) as content streams in and
+ * onStatus(faText) as the engine moves through providers/stages.
+ * Returns { text, providerLabel, model, stacked }.
+ *
+ * STACK MODE (when roster.limits.stack && mode === "chat" && engine === "max"):
+ * stage 1 = strongest brain drafts (streamed live to the user),
+ * stage 2 = a second strong brain refines; the user's message bubble is
+ * replaced with the refined final. If stage 2 fails, stage 1's answer stands.
+ */
+export async function generateAnswer({
+  messages,
+  mode = "chat",
+  engine = "max",
+  signal,
+  onDelta = () => {},
+  onStatus = () => {},
+  onReplace = null, // stack stage-2 hook: clears the streamed draft from UI
+}) {
+  const roster = getRoster();
+  const L = roster.limits;
+  const useStack =
+    !!L.stack && mode === "chat" && engine === "max" && typeof onReplace === "function";
 
-function* splitChunks(text, size = 28) {
-  for (let i = 0; i < text.length; i += size) yield text.slice(i, i + size);
+  if (!useStack) {
+    return onePass({ messages, mode, engine, roster, signal, onDelta, onStatus });
+  }
+
+  // ---- Stage A: drafter (strongest brain)
+  onStatus("پروفسور در حال تدوین پاسخ است…");
+  const draft = await onePass({
+    messages,
+    mode,
+    engine,
+    roster,
+    signal,
+    onDelta,
+    onStatus,
+  });
+
+  // ---- Stage B: refiner (second strong brain, cross-provider preferred)
+  try {
+    onStatus("پروفسور پاسخ را بازبینی و تقویت می‌کند…");
+    const refineMessages = [
+      { role: "system", content: REFINE_SYSTEM },
+      ...messages,
+      {
+        role: "assistant",
+        content:
+          "DRAFT ANSWER (from the first reasoning stage):\n\n" +
+          draft.text.slice(0, 20000),
+      },
+      {
+        role: "user",
+        content:
+          "Return the FINAL improved answer now. Same language as the draft. " +
+          "Emit only the final answer.",
+      },
+    ];
+
+    let collected = "";
+    let firstChunk = true;
+    const refined = await onePass({
+      messages: refineMessages,
+      mode,
+      engine: "max",
+      roster,
+      signal,
+      onStatus,
+      onDelta: (d) => {
+        if (firstChunk) {
+          firstChunk = false;
+          onReplace(); // swap the draft bubble for the refined stream
+        }
+        collected += d;
+      },
+    });
+
+    if (collected.trim().length > 40) {
+      return {
+        text: refined.text,
+        providerLabel: draft.providerLabel + " + " + refined.providerLabel,
+        model: "professor-stack",
+        stacked: true,
+      };
+    }
+    // too short to trust as a refinement -> keep the draft
+    onReplace(); // clear the second (dead) bubble if any delta got rendered
+    throw new Error("refinement-too-short");
+  } catch {
+    // refiner failed entirely -> the streamed draft stands as final
+    return { ...draft, stacked: false };
+  }
 }

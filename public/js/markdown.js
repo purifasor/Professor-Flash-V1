@@ -1,4 +1,4 @@
-// Markdown renderer for Professor Flash (marked + DOMPurify + highlight.js).
+// Markdown renderer for Professor Flash V1 (marked + DOMPurify + highlight.js).
 window.PFMD = (() => {
   let ready = false;
 
@@ -84,7 +84,59 @@ window.PFMD = (() => {
       const rtl = (t.match(/[\u0600-\u06FF]/g) || []).length;
       if (latin > rtl * 2 && latin > 12) el.setAttribute("dir", "ltr");
     });
+
+    // render mermaid diagrams (structure explanations) — lazy load
+    tmp.querySelectorAll("pre code.language-mermaid").forEach((el) => {
+      const preEl = el.closest("pre");
+      const src2 = el.textContent;
+      const holder = document.createElement("div");
+      holder.className = "mermaid-box";
+      holder.setAttribute("data-mermaid", src2);
+      preEl.replaceWith(holder);
+      renderMermaid(holder);
+    });
+
     return tmp.innerHTML;
+  }
+
+  async function renderMermaid(holder) {
+    try {
+      if (typeof mermaid === "undefined") {
+        await loadScript("https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js");
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: "dark",
+          themeVariables: {
+            background: "#0e0d0c",
+            primaryColor: "#2a1512",
+            primaryTextColor: "#f5f1ef",
+            primaryBorderColor: "#a03530",
+            lineColor: "#ff5f52",
+            secondaryColor: "#1c1917",
+            tertiaryColor: "#131110",
+            fontFamily: "Vazirmatn, sans-serif",
+          },
+        });
+      }
+      const id = "mmd" + Math.random().toString(36).slice(2);
+      const { svg } = await mermaid.render(id, holder.getAttribute("data-mermaid"));
+      holder.innerHTML = svg;
+    } catch {
+      const src2 = holder.getAttribute("data-mermaid") || "";
+      holder.innerHTML =
+        '<pre class="mermaid-fallback" dir="ltr">' + esc(src2) + "</pre>";
+    }
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector(`script[src="${src}"]`)) return resolve();
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
   }
 
   return { render, esc };

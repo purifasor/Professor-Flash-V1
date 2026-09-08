@@ -6,8 +6,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="پروفسور فلش">
-<title>پروفسور فلش — هوش مصنوعی و عامل کدنویس</title>
+<meta name="apple-mobile-web-app-title" content="Professor Flash V1">
+<title>Professor Flash V1 — هوش مصنوعی و عامل کدنویس</title>
 <meta name="description" content="هوش مصنوعی رایگان و آنلاین: چت هوشمند با جستجوی وب و عامل کدنویس چندفایلی با پیش‌نمایش زنده و دانلود ZIP. بدون نصب، بدون ثبت‌نام.">
 <meta name="theme-color" content="#040302">
 <link rel="icon" type="image/png" sizes="64x64" href="/assets/favicon-64.png">
@@ -31,12 +31,12 @@
   <!-- ============================ sidebar ============================ -->
   <aside class="sidebar" id="sidebar" aria-label="تاریخچه گفتگوها">
     <div class="side-head">
-      <div class="logo" title="پروفسور فلش">
-        <img src="/assets/logo.png" alt="نشان پروفسور فلش" width="38" height="38" draggable="false">
+      <div class="logo" title="Professor Flash V1">
+        <img src="/assets/logo.png" alt="نشان Professor Flash V1" width="38" height="38" draggable="false">
       </div>
       <div class="brand-text">
-        <strong>پروفسور فلش</strong>
-        <small>PROFESSOR&nbsp;FLASH</small>
+        <strong>Professor Flash V1</strong>
+        <small>PROFESSOR&nbsp;FLASH&nbsp;V1</small>
       </div>
       <button class="side-x" id="btnCloseSide" aria-label="بستن منو">✕</button>
     </div>
@@ -50,7 +50,7 @@
     <nav class="session-list" id="sessionList"></nav>
 
     <div class="side-foot">
-      <div class="side-engines">NEMOTRON-550B · NORTH-CODE · LAGUNA · QWEN-CODER — FREE</div>
+      <div class="side-engines">PROFESSOR STACK — FUSED BRAIN · FREE · ONLINE</div>
     </div>
   </aside>
 
@@ -80,7 +80,7 @@
       <div class="engine-picker" role="group" aria-label="موتور فکری" title="انتخاب موتور فکری — کیفیت اول">
         <span class="engine-led" aria-hidden="true"></span>
         <span class="engine-label" id="engineLabel">مغز حداکثری</span>
-        <button class="engine-btn active" id="engineMax" title="مغز حداکثری — نیموترون ۵۵۰ میلیاردی با استدلال بالا">MAX</button>
+        <button class="engine-btn active" id="engineMax" title="مغز حداکثری — استدلال بالا + بازبینی دومرحله‌ای">MAX</button>
         <button class="engine-btn" id="engineAgent" title="موتور تخصصی کدنویسی">CODE</button>
       </div>
 
@@ -99,29 +99,29 @@
         <div class="messages" id="messages">
           <div class="hero" id="hero">
             <div class="hero-logo">
-              <img src="/assets/logo.png" alt="پروفسور فلش" width="76" height="76" draggable="false">
+              <img src="/assets/logo.png" alt="Professor Flash V1" width="76" height="76" draggable="false">
             </div>
-            <h1>پروفسور فلش</h1>
-            <span class="hero-tag">NEON&nbsp;CORE&nbsp;//&nbsp;FREE&nbsp;·&nbsp;ONLINE&nbsp;·&nbsp;NO&nbsp;SIGNUP</span>
-            <p class="hero-sub">هوش مصنوعی زنده با مدل‌های قدرتمند رایگان — می‌فهمد، استدلال می‌کند، می‌سازد.<br>هر پاسخ تازه و برای همان لحظه تو ساخته می‌شود؛ نه از پیش آماده.</p>
+            <h1>Professor Flash V1</h1>
+            <span class="hero-tag">PROFESSOR&nbsp;STACK&nbsp;//&nbsp;FREE&nbsp;·&nbsp;ONLINE&nbsp;·&nbsp;NO&nbsp;SIGNUP</span>
+            <p class="hero-sub">هوش مصنوعی زنده با مغز ترکیبی قدرتمند — می‌فهمد، استدلال می‌کند، بحث می‌کند، می‌سازد.<br>هر پاسخ تازه و برای همان لحظه تو ساخته می‌شود؛ نه از پیش آماده.</p>
             <div class="hero-cards">
-              <button class="hero-card" data-mode="chat" data-prompt="تم نئون قرمز-مشکی دقیقاً چیه؟ پالت کاملش رو با کد رنگ‌ها بده و بگو با چه رنگ‌هایی ترکیب می‌شه.">
+              <button class="hero-card" data-mode="chat" data-prompt="ساختار یک وب‌سایت فروشگاهی به چه شکل هست؟ رسم کن و بهترین شکل توضیح بده.">
                 <span class="hc-ico">💬</span>
                 <span class="hc-t">چت هوشمند</span>
                 <span class="hc-d">پاسخ تازه و استدلال‌شده — نه متن آماده</span>
               </button>
-              <button class="hero-card" data-mode="agent" data-prompt="یک بازی مار با تم نئون قرمز و دارک بساز؛ با امتیاز، رکورد، کنترل کیبورد و لمسی و انیمیشن‌های نرم.">
+              <button class="hero-card" data-mode="agent" data-prompt="یک بازی شوتر اول‌شخص سه‌بعدی مثل کانتر استرایک بساز؛ WASD برای حرکت، کلیک چپ شلیک، کلیک راست نشانه‌گیری، دشمن، HUD و امتیاز — تم دارک نئون قرمز.">
                 <span class="hc-ico">⚡</span>
                 <span class="hc-t">عامل کدنویس</span>
                 <span class="hc-d">ساخت برنامه چندفایلی + پیش‌نمایش زنده + ZIP</span>
               </button>
-              <button class="hero-card" data-mode="chat" data-search="1" data-prompt="جدیدترین خبرهای امروز هوش مصنوعی رو خلاصه کن.">
+              <button class="hero-card" data-mode="chat" data-search="1" data-prompt="قیمت امروز دلار و بیت‌کوین چقدر است؟ با تحلیل کوتاه نوسانات.">
                 <span class="hc-ico">🌐</span>
                 <span class="hc-t">جستجوی وب</span>
-                <span class="hc-d">دانش زنده از اینترنت برای سؤال‌های به‌روز</span>
+                <span class="hc-d">دانش زنده از اینترنت برای قیمت‌ها و اخبار</span>
               </button>
             </div>
-            <div class="hero-engines">ENGINES: <b>Nemotron 550B</b> · North Code · Laguna · Qwen Coder — FREE</div>
+            <div class="hero-engines">BRAIN: <b>Professor Stack</b> — fused multi-model reasoning — FREE</div>
           </div>
         </div>
 
@@ -190,11 +190,11 @@
             <div class="preview-empty" id="previewEmpty">
               <div class="pe-sigil"><img src="/assets/logo.png" alt="" width="44" height="44" draggable="false"></div>
               <h3>کارگاه عامل کدنویس</h3>
-              <p>بگو چه برنامه‌ای می‌خواهی — عامل با نهایت توان مدل، پروژه را به صورت چندفایلی سازمان‌دهی می‌کند،<br>این‌جا اجراش می‌کند، خطاها را می‌بیند و خودش می‌سنجد و می‌توانی یک‌جا دانلودش کنی.</p>
+              <p>بگو چه برنامه‌ای می‌خواهی — عامل با نهایت توان مدل، پروژه را به صورت چندفایلی سازمان‌دهی می‌کند،<br>این‌جا اجراش می‌کند، خطاها را می‌بیند و خودش رفع می‌کند و می‌توانی یک‌جا دانلودش کنی.</p>
               <div class="pe-examples">
                 <button class="pe-chip" data-prompt="یک بازی مار کلاسیک با تم نئون قرمز و دارک بساز؛ با امتیاز، رکورد، کنترل کیبورد و لمسی و افکت‌های نرم. ساختار چندفایلی تمیز.">🐍 بازی مار</button>
                 <button class="pe-chip" data-prompt="یک ماشین‌حساب مهندسی با تم دارک نئون قرمز بساز؛ با تاریخچه محاسبات و پشتیبانی کامل از کیبورد. ساختار چندفایلی تمیز.">🧮 ماشین‌حساب</button>
-                <button class="pe-chip" data-prompt="یک اپ مدیریت کارها (To-Do) با درگ‌اند‌دراپ، دسته‌بندی، ذخیره در localStorage و تم دارک نئون قرمز بساز. ساختار چندفایلی تمیز.">✅ مدیریت کارها</button>
+                <button class="pe-chip" data-prompt="یک بازی شوتر اول‌شخص سه‌بعدی مثل کانتر استرایک بساز؛ WASD حرکت، کلیک چپ شلیک، کلیک راست نشانه‌گیری، دشمن‌ها، HUD و امتیاز — تم دارک نئون قرمز.">🎮 شوتر اول‌شخص</button>
               </div>
             </div>
             <div class="preview-stage" id="previewStage" data-device="desktop" hidden>

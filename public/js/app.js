@@ -1,6 +1,9 @@
-// Professor Flash — main app: chat streaming, sessions, sidebar, agent integration.
+// Professor Flash V1 — main app: chat streaming, sessions, sidebar, agent integration.
 // Stability rules: messages are appended incrementally (never rebuilt mid-session),
 // so entry animations, avatars and the logo never restart or flicker.
+// v3: SSE ping-tolerant reader (no more mid-answer drops), composer LOCKED
+// while the agent works (with a live build HUD), replace-event for the
+// Professor Stack refine stage.
 window.PFApp = (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -55,6 +58,8 @@ window.PFApp = (() => {
     $("btnSend").hidden = on;
     $("btnStop").hidden = !on;
     $("messages").classList.toggle("stream-lock", on);
+    // lock the composer while the agent is working — sending mid-build caused bugs
+    $("input").disabled = on && mode === "agent";
     if (window.PFAgent && typeof PFAgent.setBusy === "function") PFAgent.setBusy(on);
     updateSendBtn();
   }
@@ -64,8 +69,8 @@ window.PFApp = (() => {
   }
 
   /* ============================ engine switch ============================ */
-  // MAX = strongest brain (Nemotron Ultra 550B @ high reasoning).
-  // AGENT = coding-tuned specialists that follow the file protocol.
+  // MAX = strongest brain (reasoning high, stacked refine pass).
+  // CODE = coding-tuned specialists that follow the file protocol.
   function applyEngineUi() {
     $("engineMax").classList.toggle("active", engineChoice === "max");
     $("engineAgent").classList.toggle("active", engineChoice === "agent");
@@ -159,13 +164,44 @@ window.PFApp = (() => {
     }
   }
 
+  /* ============================ agent HUD ============================ */
+  // A compact process box inside the agent chat bubble showing what the
+  // agent is doing: thinking, building which file, running, fixing.
+  function makeHud(el) {
+    const hud = document.createElement("div");
+    hud.className = "agent-hud";
+    hud.innerHTML =
+      '<div class="hud-row"><span class="hud-spinner"></span><span class="hud-text">در حال فکر کردن…</span></div>';
+    el.appendChild(hud);
+    return {
+      set(text) {
+        hud.querySelector(".hud-text").textContent = text;
+      },
+      addFile(path) {
+        let row = hud.querySelector(".hud-files");
+        if (!row) {
+          row = document.createElement("div");
+          row.className = "hud-files";
+          hud.appendChild(row);
+        }
+        const chip = document.createElement("span");
+        chip.className = "hud-file";
+        chip.textContent = path;
+        row.appendChild(chip);
+      },
+      remove() {
+        hud.remove();
+      },
+    };
+  }
+
   /* ============================ messages render ============================ */
   function fileChip(path) {
     return `<button class="file-chip" data-file="${PFMD.esc(path)}" title="باز کردن در کارگاه">📄 ${PFMD.esc(path)}</button>`;
   }
 
   // In chat mode there is no workbench: ```file: blocks become inline code.
-  const EXT_LANG = { html: "html", css: "css", js: "javascript", json: "json", md: "markdown", svg: "xml", txt: "text", py: "python" };
+  const EXT_LANG = { html: "html", css: "css", js: "javascript", json: "json", md: "markdown", svg: "xml", txt: "text", py: "python", cpp: "cpp", ts: "typescript" };
   function chatifyFileBlocks(text) {
     return String(text).replace(/```file:([^\n`]+)\n([\s\S]*?)(?:```|$)/g, (_m, p, body) => {
       const ext = (p.trim().split(".").pop() || "").toLowerCase();
@@ -205,6 +241,7 @@ window.PFApp = (() => {
   function wirePromptButtons(root) {
     root.querySelectorAll("[data-prompt]").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (streaming) return;
         const prompt = btn.dataset.prompt;
         if (btn.dataset.mode) setMode(btn.dataset.mode);
         if (btn.dataset.search) setSearch(true);
@@ -217,7 +254,7 @@ window.PFApp = (() => {
     const wrap = document.createElement("div");
     wrap.className = "msg " + (m.role === "user" ? "user" : "ai");
     const avatar = m.role === "user" ? "👤" : "⚡";
-    const role = m.role === "user" ? "شما" : "پروفسور فلش";
+    const role = m.role === "user" ? "شما" : "پروفسور";
     const modelChip = m.model ? `<span class="model-chip">${PFMD.esc(shortModel(m.model))}</span>` : "";
     const msgMode = m.mode || mode;
     const contentHtml = m.role === "user" ? PFMD.esc(m.content) : renderContent(m.content, msgMode);
@@ -276,10 +313,10 @@ window.PFApp = (() => {
     $("benchFab").hidden = mode !== "agent";
     $("btnSearch").style.display = mode === "chat" ? "" : "none";
     $("input").placeholder = mode === "agent"
-      ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی مار با تم نئون قرمز بساز)"
+      ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی شوتر اول‌شخص سه‌بعدی با تم نئون قرمز بساز)"
       : "پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)";
     $("composerHint").innerHTML = mode === "agent"
-      ? "عامل کدنویس: پروژهٔ <b>چندفایلی</b> سازمان‌یافته + اجرای زنده در کارگاه + کنسول خطا + ZIP"
+      ? "عامل کدنویس: پروژهٔ <b>چندفایلی</b> سازمان‌یافته + اجرای زنده در کارگاه + کنسول + رفع خودکار خطا + ZIP"
       : "مدل‌های قوی و رایگان · پاسخ تازه، نه آماده · <b>مغز متصل به گیت‌هاب</b>";
     applyEngineUi();
     if (!soft) {
@@ -343,6 +380,7 @@ window.PFApp = (() => {
     s.messages.push(aiMsg);
     const msgEl = buildStreamingMsg();
     $("messages").appendChild(msgEl);
+    const hud = mode === "agent" ? makeHud(msgEl.querySelector(".msg-body")) : null;
     saveSessions();
     renderSessionList();
     scrollBottom(true);
@@ -358,6 +396,8 @@ window.PFApp = (() => {
     let gotDone = false;
     let renderTimer = null;
     let ingestTimer = null;
+    let currentFile = null;
+    let lastStatus = "";
 
     const scheduleRender = () => {
       if (renderTimer) return;
@@ -374,6 +414,19 @@ window.PFApp = (() => {
         ingestTimer = null;
         PFAgent.ingest(raw);
       }, 400);
+    };
+
+    // HUD: track which file the agent is currently writing
+    const trackHud = () => {
+      if (!hud) return;
+      const m = /```file:([^\n`]+)\n/.exec(raw.slice(Math.max(0, raw.length - 400)));
+      if (m && m[1] !== currentFile) {
+        currentFile = m[1].trim();
+        hud.set("در حال نوشتن " + currentFile);
+        hud.addFile(currentFile);
+      } else if (/SUMMARY:|خلاصه/.test(raw.slice(-200)) && !currentFile) {
+        hud.set("جمع‌بندی…");
+      }
     };
 
     // build API history (strip heavy file blocks from older agent turns)
@@ -417,7 +470,10 @@ window.PFApp = (() => {
           let d;
           try { d = JSON.parse(line.slice(5).trim()); } catch { continue; }
 
+          if (d.type === "ping") continue; // keepalive — ignore
           if (d.type === "status") {
+            lastStatus = d.text;
+            if (hud && !gotFirst) hud.set(d.text);
             if (!gotFirst) {
               statusEl.hidden = false;
               statusEl.querySelector("span:last-child").textContent = d.text;
@@ -427,13 +483,24 @@ window.PFApp = (() => {
               gotFirst = true;
               statusEl.hidden = true;
               typingEl.hidden = true;
+              if (hud) hud.set("در حال تولید پاسخ…");
             }
             raw += d.text;
             scheduleRender();
             scheduleIngest();
+            trackHud();
+          } else if (d.type === "replace") {
+            // Professor Stack refine stage: clear the draft, stream the refined
+            raw = "";
+            contentEl.innerHTML = "";
+            if (hud) hud.set("پاسخ نهایی در حال نوشته شدن…");
           } else if (d.type === "done") {
             gotDone = true;
-            aiMsg.model = d.model ? `${d.provider || ""} · ${d.model}` : null;
+            aiMsg.model = d.model
+              ? d.stacked
+                ? "Professor Stack"
+                : `${d.provider || ""} · ${d.model}`
+              : null;
             if (d.search) aiMsg.search = d.search;
           } else if (d.type === "error") {
             throw Object.assign(new Error(d.message || "engine-error"), { details: d.details });
@@ -453,6 +520,10 @@ window.PFApp = (() => {
     clearTimeout(ingestTimer);
     statusEl.hidden = true;
     typingEl.hidden = true;
+    if (hud) {
+      if (raw) hud.remove();
+      else hud.set(aiMsg._error ? "خطا در پردازش" : "متوقف شد");
+    }
 
     if (mode === "agent") PFAgent.ingest(raw, { final: true });
 
@@ -479,7 +550,7 @@ window.PFApp = (() => {
       contentEl.appendChild(box);
     } else {
       contentEl.innerHTML = renderContent(raw, mode);
-      if (!gotDone) {
+      if (!gotDone && raw) {
         // connection dropped before completion — offer a retry hint
         const note = document.createElement("div");
         note.className = "err-box";
@@ -512,7 +583,7 @@ window.PFApp = (() => {
     wrap.innerHTML =
       `<div class="msg-avatar">⚡</div>` +
       `<div class="msg-body">` +
-      `<div class="msg-meta"><span class="msg-role">پروفسور فلش</span></div>` +
+      `<div class="msg-meta"><span class="msg-role">پروفسور</span></div>` +
       `<div class="status-line" hidden><span class="status-dot"></span><span>…</span></div>` +
       `<div class="typing"><span></span><span></span><span></span></div>` +
       `<div class="msg-content md"></div></div>`;
@@ -567,6 +638,7 @@ window.PFApp = (() => {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        if (streaming) return;
         const v = input.value;
         input.value = "";
         input.style.height = "auto";
@@ -575,6 +647,7 @@ window.PFApp = (() => {
       }
     });
     $("btnSend").addEventListener("click", () => {
+      if (streaming) return;
       const v = input.value;
       input.value = "";
       input.style.height = "auto";
