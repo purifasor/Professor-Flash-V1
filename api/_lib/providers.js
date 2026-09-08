@@ -508,6 +508,7 @@ export async function generateAnswer({
           onReplace(); // swap the draft bubble for the refined stream
         }
         collected += d;
+        onDelta(d); // stream the refined answer to the user
       },
     });
 
@@ -519,11 +520,24 @@ export async function generateAnswer({
         stacked: true,
       };
     }
-    // too short to trust as a refinement -> keep the draft
-    onReplace(); // clear the second (dead) bubble if any delta got rendered
-    throw new Error("refinement-too-short");
+    // too short to trust as a refinement -> replay the draft
+    onReplace();
+    for (const piece of splitChunks(draft.text)) {
+      onDelta(piece);
+      await sleep(6);
+    }
+    return { ...draft, stacked: false };
   } catch {
-    // refiner failed entirely -> the streamed draft stands as final
+    // refiner failed entirely -> replay the draft so the bubble isn't empty
+    try {
+      onReplace();
+      for (const piece of splitChunks(draft.text)) {
+        onDelta(piece);
+        await sleep(4);
+      }
+    } catch {
+      /* client gone */
+    }
     return { ...draft, stacked: false };
   }
 }
