@@ -1,32 +1,26 @@
-// Professor Flash V1 — main app: chat streaming, sessions, sidebar, agent integration.
-// Stability rules: messages are appended incrementally (never rebuilt mid-session),
-// so entry animations, avatars and the logo never restart or flicker.
-// v3: SSE ping-tolerant reader (no more mid-answer drops), composer LOCKED
-// while the agent works (with a live build HUD), replace-event for the
-// Professor Stack refine stage.
+// Professor AI — main app: chat streaming, sessions, model picker, agent integration.
+// English UI. Model choice locks per-conversation once set. Custom providers
+// (user-added models) stream through the same pipeline with red errors.
 window.PFApp = (() => {
   const $ = (id) => document.getElementById(id);
 
   /* ============================ state ============================ */
-  const LS_KEY = "professor-flash.v3.sessions";
-  const LS_SIDE = "professor-flash.side";
-  const LS_ENGINE = "professor-flash.engine";
+  const LS_KEY = "professor-ai.sessions";
+  const LS_SIDE = "professor-ai.side";
+  const LS_SEARCH = "professor-ai.search";
   let sessions = loadSessions();
   let currentId = null;
   let mode = "chat";
-  let searchOn = false;
+  let searchOn = loadBool(LS_SEARCH, false);
   let streaming = false;
   let abortCtrl = null;
-  let engineChoice = loadEngine(); // "max" | "agent"
+  let providers = []; // user's custom providers [{name, modelId,...}]
 
   function loadSessions() {
     try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; }
   }
-  function loadEngine() {
-    try {
-      const v = localStorage.getItem(LS_ENGINE);
-      return v === "agent" ? "agent" : "max";
-    } catch { return "max"; }
+  function loadBool(k, d) {
+    try { const v = localStorage.getItem(k); return v === null ? d : v === "1"; } catch { return d; }
   }
   let saveTimer = null;
   function saveSessions() {
@@ -58,7 +52,6 @@ window.PFApp = (() => {
     $("btnSend").hidden = on;
     $("btnStop").hidden = !on;
     $("messages").classList.toggle("stream-lock", on);
-    // lock the composer while the agent is working — sending mid-build caused bugs
     $("input").disabled = on && mode === "agent";
     if (window.PFAgent && typeof PFAgent.setBusy === "function") PFAgent.setBusy(on);
     updateSendBtn();
@@ -68,31 +61,13 @@ window.PFApp = (() => {
     $("btnSend").disabled = streaming || !$("input").value.trim();
   }
 
-  /* ============================ engine switch ============================ */
-  // MAX = strongest brain (reasoning high, stacked refine pass).
-  // CODE = coding-tuned specialists that follow the file protocol.
-  function applyEngineUi() {
-    $("engineMax").classList.toggle("active", engineChoice === "max");
-    $("engineAgent").classList.toggle("active", engineChoice === "agent");
-    const map = {
-      max: { chat: "مغز حداکثری", agent: "مغز حداکثری — استدلال بالا" },
-      agent: { chat: "موتور تخصصی", agent: "موتور تخصصی کدنویسی" },
-    };
-    $("engineLabel").textContent = map[engineChoice][mode];
-  }
-  function setEngine(choice) {
-    engineChoice = choice === "agent" ? "agent" : "max";
-    try { localStorage.setItem(LS_ENGINE, engineChoice); } catch { /* noop */ }
-    applyEngineUi();
-    toast(engineChoice === "max" ? "مغز حداکثری فعال شد — کیفیت اول 🧠" : "موتور تخصصی کدنویسی فعال شد ⚙");
-  }
-
   /* ============================ sessions ============================ */
   function newSession() {
     const s = {
       id: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      title: "گفتگوی جدید",
+      title: "New chat",
       mode,
+      provider: "", // "" = default; locked on first send
       created: Date.now(),
       messages: [],
       files: [],
@@ -102,6 +77,7 @@ window.PFApp = (() => {
     saveSessions();
     renderMessages();
     renderSessionList();
+    renderModelPicker();
     PFAgent.reset();
     return s;
   }
@@ -119,6 +95,7 @@ window.PFApp = (() => {
       setMode(s.mode || "chat", { soft: true });
       renderMessages();
       PFAgent.setFiles(s.files || []);
+      renderModelPicker();
     }
     closeSideMobile();
     renderSessionList();
@@ -135,6 +112,7 @@ window.PFApp = (() => {
         setMode(nxt.mode || "chat", { soft: true });
         renderMessages();
         PFAgent.setFiles(nxt.files || []);
+        renderModelPicker();
       } else {
         newSession();
         return;
@@ -147,7 +125,7 @@ window.PFApp = (() => {
   function renderSessionList() {
     const box = $("sessionList");
     if (!sessions.length) {
-      box.innerHTML = '<div class="side-empty">هنوز گفتگویی نداری.</div>';
+      box.innerHTML = '<div class="side-empty">No conversations yet.</div>';
       return;
     }
     box.innerHTML = "";
@@ -157,7 +135,7 @@ window.PFApp = (() => {
       b.innerHTML =
         `<span class="si-ico">${s.mode === "agent" ? "⚡" : "💬"}</span>` +
         `<span class="si-title">${PFMD.esc(s.title)}</span>` +
-        `<span class="si-del" title="حذف">✕</span>`;
+        `<span class="si-del" title="Delete">✕</span>`;
       b.addEventListener("click", () => switchSession(s.id));
       b.querySelector(".si-del").addEventListener("click", (e) => deleteSession(s.id, e));
       box.appendChild(b);
@@ -165,18 +143,14 @@ window.PFApp = (() => {
   }
 
   /* ============================ agent HUD ============================ */
-  // A compact process box inside the agent chat bubble showing what the
-  // agent is doing: thinking, building which file, running, fixing.
   function makeHud(el) {
     const hud = document.createElement("div");
     hud.className = "agent-hud";
     hud.innerHTML =
-      '<div class="hud-row"><span class="hud-spinner"></span><span class="hud-text">در حال فکر کردن…</span></div>';
+      '<div class="hud-row"><span class="hud-spinner"></span><span class="hud-text">Thinking…</span></div>';
     el.appendChild(hud);
     return {
-      set(text) {
-        hud.querySelector(".hud-text").textContent = text;
-      },
+      set(text) { hud.querySelector(".hud-text").textContent = text; },
       addFile(path) {
         let row = hud.querySelector(".hud-files");
         if (!row) {
@@ -189,18 +163,15 @@ window.PFApp = (() => {
         chip.textContent = path;
         row.appendChild(chip);
       },
-      remove() {
-        hud.remove();
-      },
+      remove() { hud.remove(); },
     };
   }
 
   /* ============================ messages render ============================ */
   function fileChip(path) {
-    return `<button class="file-chip" data-file="${PFMD.esc(path)}" title="باز کردن در کارگاه">📄 ${PFMD.esc(path)}</button>`;
+    return `<button class="file-chip" data-file="${PFMD.esc(path)}" title="Open in workshop">📄 ${PFMD.esc(path)}</button>`;
   }
 
-  // In chat mode there is no workbench: ```file: blocks become inline code.
   const EXT_LANG = { html: "html", css: "css", js: "javascript", json: "json", md: "markdown", svg: "xml", txt: "text", py: "python", cpp: "cpp", ts: "typescript" };
   function chatifyFileBlocks(text) {
     return String(text).replace(/```file:([^\n`]+)\n([\s\S]*?)(?:```|$)/g, (_m, p, body) => {
@@ -231,30 +202,16 @@ window.PFApp = (() => {
   function buildHero() {
     const hero = document.createElement("div");
     hero.innerHTML = HERO_HTML;
-    const el = hero.firstElementChild;
-    wirePromptButtons(el);
-    return el;
+    return hero.firstElementChild;
   }
 
   const HERO_HTML = $("hero") ? $("hero").outerHTML : "";
-
-  function wirePromptButtons(root) {
-    root.querySelectorAll("[data-prompt]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        if (streaming) return;
-        const prompt = btn.dataset.prompt;
-        if (btn.dataset.mode) setMode(btn.dataset.mode);
-        if (btn.dataset.search) setSearch(true);
-        send(prompt);
-      });
-    });
-  }
 
   function buildMsg(m) {
     const wrap = document.createElement("div");
     wrap.className = "msg " + (m.role === "user" ? "user" : "ai");
     const avatar = m.role === "user" ? "👤" : "⚡";
-    const role = m.role === "user" ? "شما" : "پروفسور";
+    const role = m.role === "user" ? "You" : "Professor";
     const modelChip = m.model ? `<span class="model-chip">${PFMD.esc(shortModel(m.model))}</span>` : "";
     const msgMode = m.mode || mode;
     const contentHtml = m.role === "user" ? PFMD.esc(m.content) : renderContent(m.content, msgMode);
@@ -277,9 +234,9 @@ window.PFApp = (() => {
     wrap.querySelectorAll(".code-copy").forEach((b) =>
       b.addEventListener("click", async () => {
         const code = b.closest(".code-wrap")?.querySelector("code")?.innerText || "";
-        try { await navigator.clipboard.writeText(code); b.textContent = "کپی شد ✓"; }
-        catch { b.textContent = "خطا"; }
-        setTimeout(() => (b.textContent = "کپی"), 1600);
+        try { await navigator.clipboard.writeText(code); b.textContent = "Copied ✓"; }
+        catch { b.textContent = "Error"; }
+        setTimeout(() => (b.textContent = "Copy"), 1600);
       })
     );
     wrap.querySelectorAll(".file-chip").forEach((b) =>
@@ -294,10 +251,50 @@ window.PFApp = (() => {
     return String(id || "").split("/").pop().replace(/:free$/, "");
   }
 
-  // Remove the hero exactly once (no re-render, no animation restart).
   function dropHero() {
     const h = $("messages").querySelector(".hero");
     if (h) h.remove();
+  }
+
+  /* ============================ model picker ============================ */
+  // Per-conversation lock: once a session has messages, its provider is fixed.
+  function renderModelPicker() {
+    const box = $("modelOptions");
+    if (!box) return;
+    box.innerHTML = "";
+    const s = current();
+    const locked = s && s.messages && s.messages.length > 0;
+    const chosen = (s && s.provider) || "";
+
+    const mk = (label, value, isCustom) => {
+      const b = document.createElement("button");
+      b.className = "mp-option" + ((value || "") === chosen ? " active" : "") + (isCustom ? " custom" : "");
+      b.dataset.provider = value || "";
+      b.textContent = label;
+      b.disabled = locked && (value || "") !== chosen;
+      b.title = locked ? "This conversation is locked to its model" : label;
+      b.addEventListener("click", () => {
+        if (locked) return;
+        const sess = current();
+        if (sess) {
+          sess.provider = value || "";
+          saveSessions();
+        }
+        renderModelPicker();
+      });
+      return b;
+    };
+
+    box.appendChild(mk("Default", "", false));
+    for (const p of providers) {
+      box.appendChild(mk(p.name || p.modelId, p.name || p.modelId, true));
+    }
+    $("modelPickerBar").classList.toggle("locked", locked);
+  }
+
+  function setProviders(list) {
+    providers = Array.isArray(list) ? list : [];
+    renderModelPicker();
   }
 
   /* ============================ mode & search ============================ */
@@ -311,14 +308,12 @@ window.PFApp = (() => {
     $("btnModeAgent").setAttribute("aria-selected", String(mode === "agent"));
     $("bench").hidden = mode !== "agent";
     $("benchFab").hidden = mode !== "agent";
-    $("btnSearch").style.display = mode === "chat" ? "" : "none";
     $("input").placeholder = mode === "agent"
-      ? "برنامه‌ای که می‌خواهی را توصیف کن… (مثلاً: یک بازی شوتر اول‌شخص سه‌بعدی با تم نئون قرمز بساز)"
-      : "پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)";
+      ? "Describe the app you want… (e.g. build a 3D first-person shooter with a neon-red dark theme)"
+      : "Write your message… (Enter = send, Shift+Enter = new line)";
     $("composerHint").innerHTML = mode === "agent"
-      ? "عامل کدنویس: پروژهٔ <b>چندفایلی</b> سازمان‌یافته + اجرای زنده در کارگاه + کنسول + رفع خودکار خطا + ZIP"
-      : "مدل‌های قوی و رایگان · پاسخ تازه، نه آماده · <b>مغز متصل به گیت‌هاب</b>";
-    applyEngineUi();
+      ? "Coding agent: <b>multi-file</b> projects + live preview + console + auto-fix + ZIP"
+      : 'Live prices &amp; time data · fresh answers, never canned · <b>your history stays private</b>';
     if (!soft) {
       const s = current();
       if (s && s.messages.length && s.mode !== mode) {
@@ -331,10 +326,11 @@ window.PFApp = (() => {
     }
   }
 
-  function setSearch(on) {
+  function setSearch(on, { silent = false } = {}) {
     searchOn = !!on;
+    try { localStorage.setItem(LS_SEARCH, on ? "1" : "0"); } catch { /* noop */ }
     $("btnSearch").setAttribute("aria-pressed", String(searchOn));
-    toast(searchOn ? "جستجوی وب فعال شد 🌐" : "جستجوی وب خاموش شد");
+    if (!silent) toast(searchOn ? "Web search enabled 🌐" : "Web search disabled");
   }
 
   /* ============================ sidebar ============================ */
@@ -361,7 +357,6 @@ window.PFApp = (() => {
     if (!text || streaming) return;
     const s = ensureSession();
 
-    // retry path: the user bubble is already on screen and in history
     const skipUser =
       reuseLastUser && s.messages.length && s.messages[s.messages.length - 1].role === "user";
 
@@ -370,10 +365,9 @@ window.PFApp = (() => {
       s.mode = mode;
       const userMsg = { role: "user", content: text };
       s.messages.push(userMsg);
-
-      // incremental DOM: hero out, user message in — nothing else is touched
       dropHero();
       $("messages").appendChild(buildMsg(userMsg));
+      renderModelPicker(); // lock the model now that the conversation started
     }
 
     const aiMsg = { role: "assistant", content: "", model: null, mode, _live: true };
@@ -397,7 +391,6 @@ window.PFApp = (() => {
     let renderTimer = null;
     let ingestTimer = null;
     let currentFile = null;
-    let lastStatus = "";
 
     const scheduleRender = () => {
       if (renderTimer) return;
@@ -415,30 +408,28 @@ window.PFApp = (() => {
         PFAgent.ingest(raw);
       }, 400);
     };
-
-    // HUD: track which file the agent is currently writing
     const trackHud = () => {
       if (!hud) return;
       const m = /```file:([^\n`]+)\n/.exec(raw.slice(Math.max(0, raw.length - 400)));
       if (m && m[1] !== currentFile) {
         currentFile = m[1].trim();
-        hud.set("در حال نوشتن " + currentFile);
+        hud.set("Writing " + currentFile);
         hud.addFile(currentFile);
-      } else if (/SUMMARY:|خلاصه/.test(raw.slice(-200)) && !currentFile) {
-        hud.set("جمع‌بندی…");
+      } else if (/SUMMARY:|CONTINUE:/i.test(raw.slice(-120)) && !m) {
+        hud.set(/CONTINUE:/i.test(raw.slice(-120)) ? "Continuing build…" : "Wrapping up…");
       }
     };
 
-    // build API history (strip heavy file blocks from older agent turns)
     const history = s.messages.slice(0, -1).map((m) => ({
       role: m.role,
       content:
         m.role === "assistant"
-          ? m.content.replace(/```file:[^\n`]+\n[\s\S]*?```/g, "\n[فایل‌ها ساخته شد]\n")
+          ? m.content.replace(/```file:[^\n`]+\n[\s\S]*?```/g, "\n[files emitted]\n")
           : m.content,
     }));
 
-    const payload = { mode, messages: history, engine: engineChoice };
+    const payload = { mode, messages: history };
+    if (s.provider) payload.provider = s.provider; // custom provider name
     if (mode === "chat" && searchOn) payload.search = true;
     if (mode === "agent") {
       payload.files = PFAgent.getFiles();
@@ -470,9 +461,8 @@ window.PFApp = (() => {
           let d;
           try { d = JSON.parse(line.slice(5).trim()); } catch { continue; }
 
-          if (d.type === "ping") continue; // keepalive — ignore
+          if (d.type === "ping") continue;
           if (d.type === "status") {
-            lastStatus = d.text;
             if (hud && !gotFirst) hud.set(d.text);
             if (!gotFirst) {
               statusEl.hidden = false;
@@ -483,24 +473,15 @@ window.PFApp = (() => {
               gotFirst = true;
               statusEl.hidden = true;
               typingEl.hidden = true;
-              if (hud) hud.set("در حال تولید پاسخ…");
+              if (hud) hud.set("Generating…");
             }
             raw += d.text;
             scheduleRender();
             scheduleIngest();
             trackHud();
-          } else if (d.type === "replace") {
-            // Professor Stack refine stage: clear the draft, stream the refined
-            raw = "";
-            contentEl.innerHTML = "";
-            if (hud) hud.set("پاسخ نهایی در حال نوشته شدن…");
           } else if (d.type === "done") {
             gotDone = true;
-            aiMsg.model = d.model
-              ? d.stacked
-                ? "Professor Stack"
-                : `${d.provider || ""} · ${d.model}`
-              : null;
+            aiMsg.model = d.model ? `${d.provider || ""} · ${d.model}` : null;
             if (d.search) aiMsg.search = d.search;
           } else if (d.type === "error") {
             throw Object.assign(new Error(d.message || "engine-error"), { details: d.details });
@@ -509,20 +490,19 @@ window.PFApp = (() => {
       }
     } catch (e) {
       if (e.name === "AbortError") {
-        raw += raw ? "\n\n⏹ متوقف شد." : "";
+        raw += raw ? "\n\n⏹ Stopped." : "";
       } else {
         aiMsg._error = e.message;
       }
     }
 
-    // finalize
     clearTimeout(renderTimer);
     clearTimeout(ingestTimer);
     statusEl.hidden = true;
     typingEl.hidden = true;
     if (hud) {
       if (raw) hud.remove();
-      else hud.set(aiMsg._error ? "خطا در پردازش" : "متوقف شد");
+      else hud.set(aiMsg._error ? "Failed" : "Stopped");
     }
 
     if (mode === "agent") PFAgent.ingest(raw, { final: true });
@@ -533,13 +513,28 @@ window.PFApp = (() => {
     if (sNow && mode === "agent") sNow.files = PFAgent.getFiles();
     saveSessions();
 
+    // persist conversation to the private DB (best-effort, silent)
+    if (gotDone || raw) {
+      fetch("/api/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: sNow?.title || "Conversation",
+          mode,
+          model: sNow?.provider || "default",
+          createdAt: new Date(sNow?.created || Date.now()).toISOString(),
+          messages: (sNow?.messages || []).filter((m) => !m._live && m.content),
+        }),
+      }).catch(() => {});
+    }
+
     if (aiMsg._error && !raw) {
       contentEl.innerHTML = "";
       const box = document.createElement("div");
-      box.className = "err-box";
+      box.className = "err-box red";
       box.innerHTML = `<span>⚠ ${PFMD.esc(aiMsg._error)}</span>`;
       const retry = document.createElement("button");
-      retry.textContent = "تلاش دوباره";
+      retry.textContent = "Try again";
       retry.addEventListener("click", () => {
         const s2 = current();
         if (s2) { s2.messages.pop(); saveSessions(); }
@@ -551,13 +546,12 @@ window.PFApp = (() => {
     } else {
       contentEl.innerHTML = renderContent(raw, mode);
       if (!gotDone && raw) {
-        // connection dropped before completion — offer a retry hint
         const note = document.createElement("div");
         note.className = "err-box";
         note.style.marginTop = "10px";
-        note.innerHTML = `<span>⚠ اتصال قبل از پایان کامل پاسخ قطع شد.</span>`;
+        note.innerHTML = `<span>⚠ Connection dropped before the answer finished.</span>`;
         const again = document.createElement("button");
-        again.textContent = "تلاش دوباره";
+        again.textContent = "Try again";
         again.addEventListener("click", () => {
           const s2 = current();
           if (s2) { s2.messages.pop(); saveSessions(); }
@@ -583,7 +577,7 @@ window.PFApp = (() => {
     wrap.innerHTML =
       `<div class="msg-avatar">⚡</div>` +
       `<div class="msg-body">` +
-      `<div class="msg-meta"><span class="msg-role">پروفسور</span></div>` +
+      `<div class="msg-meta"><span class="msg-role">Professor</span></div>` +
       `<div class="status-line" hidden><span class="status-dot"></span><span>…</span></div>` +
       `<div class="typing"><span></span><span></span><span></span></div>` +
       `<div class="msg-content md"></div></div>`;
@@ -602,7 +596,7 @@ window.PFApp = (() => {
       PFAgent.openMobile();
       PFAgent.pushConsole("log", "auto-fix: asking the agent to repair " + errors.length + " error(s)…");
       send(
-        "پیش‌نمایش این خطاها را گرفت. علت اصلی را پیدا کن و فایل(های) اصلاح‌شده را کامل دوباره بساز:\n" +
+        "The preview reported these runtime errors. Find the root cause and re-emit the fixed file(s) in full:\n" +
           errors.map((e) => "- " + e).join("\n"),
         { errors }
       );
@@ -611,14 +605,11 @@ window.PFApp = (() => {
 
   /* ============================ init ============================ */
   function init() {
-    // capture hero template once, then clear (rendered via buildHero)
     $("messages").innerHTML = "";
 
     $("btnModeChat").addEventListener("click", () => setMode("chat"));
     $("btnModeAgent").addEventListener("click", () => setMode("agent"));
     $("btnSearch").addEventListener("click", () => setSearch(!searchOn));
-    $("engineMax").addEventListener("click", () => setEngine("max"));
-    $("engineAgent").addEventListener("click", () => setEngine("agent"));
     $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeSideMobile(); } });
     $("btnOpenSide").addEventListener("click", openSide);
     $("btnCloseSide").addEventListener("click", closeSide);
@@ -656,10 +647,8 @@ window.PFApp = (() => {
     });
     $("btnStop").addEventListener("click", stop);
 
-    wirePromptButtons(document);
     wireAgent();
 
-    // sidebar: desktop remembers preference; mobile starts closed
     if (isMobile()) {
       $("app").dataset.side = "closed";
     } else {
@@ -668,7 +657,6 @@ window.PFApp = (() => {
       $("app").dataset.side = pref;
     }
 
-    // restore last session or start fresh
     if (sessions.length) {
       currentId = sessions[0].id;
       const s = current();
@@ -679,11 +667,19 @@ window.PFApp = (() => {
       newSession();
     }
     renderSessionList();
-    applyEngineUi();
-    input.focus();
+    setSearch(searchOn, { silent: true });
   }
 
   document.addEventListener("DOMContentLoaded", init);
 
-  return { toast };
+  return {
+    toast, send, setProviders,
+    onUser(u) {
+      // called by auth.js when the session exists — load the user's providers
+      fetch("/api/profile")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (d) setProviders(d.providers || []); })
+        .catch(() => {});
+    },
+  };
 })();

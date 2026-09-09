@@ -120,8 +120,8 @@ export function chatSystemPrompt(lastUserText = "") {
     chatPrompt,
     skillsSection(bank, prioritized),
     knowledgeSection(bank),
-    "CONTEXT: You are running live inside the Professor Flash V1 web app " +
-      "(free, online, no signup). Today is " +
+    "CONTEXT: You are running live inside the Professor AI web app " +
+      "(free, online). Today is " +
       new Date().toISOString().slice(0, 10) +
       ". Mirror the user's language exactly.",
   ]
@@ -141,6 +141,7 @@ export function agentSystemPrompt() {
     skillsSection(bank, prioritized),
     knowledgeSection(bank),
     "FINAL REMINDER (highest priority):\n" +
+      "- Run the 4-stage pipeline: ANALYZE → PLAN (task breakdown) → MAP (sync map) → BUILD.\n" +
       "- Output files ONLY as ```file:<path> blocks; complete files; entry = index.html.\n" +
       "- Persian user ⇒ lang=fa dir=rtl + Vazirmatn + Persian UI text + exact requested theme palette as CSS variables.\n" +
       "- HTML/CSS/JS must be perfectly synced: every href/src/id/class/function consistent across files.\n" +

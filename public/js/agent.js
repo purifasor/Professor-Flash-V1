@@ -128,7 +128,7 @@ window.PFAgent = (() => {
     const tree = $("fileTree");
     const paths = [...files.keys()].sort((a, b) => a.localeCompare(b));
     if (!paths.length) {
-      tree.innerHTML = '<div class="tree-empty">هنوز فایلی ساخته نشده.</div>';
+      tree.innerHTML = '<div class="tree-empty">No files yet.</div>';
       return;
     }
     const byDir = new Map();
@@ -163,7 +163,7 @@ window.PFAgent = (() => {
     $("btnCopyFile").hidden = !has;
     $("btnCloseFile").hidden = !has;
     if (!has) {
-      name.textContent = "فایلی انتخاب نشده";
+      name.textContent = "No file selected";
       code.textContent = "";
       code.className = "";
       placeholder.style.display = "";
@@ -175,7 +175,7 @@ window.PFAgent = (() => {
     const content = files.get(activeFile) || "";
     // empty file → visible warning instead of a blank viewer
     if (!content.trim()) {
-      code.textContent = "// ⚠ فایل خالی است — عامل هنوز محتوایش را ننوشته است.";
+      code.textContent = "// ⚠ Empty file — the agent has not written its content yet.";
       code.className = "";
       return;
     }
@@ -476,7 +476,7 @@ window.PFAgent = (() => {
       cn.classList.toggle("has-err", errCount > 0);
     }
     if (!consoleLines.length) {
-      box.innerHTML = '<div class="con-line muted">کنسول خالی است — خروجی برنامه این‌جا نمایش داده می‌شود.</div>';
+      box.innerHTML = '<div class="con-line muted">Console is empty — live app output appears here.</div>';
       return;
     }
     box.innerHTML = consoleLines
@@ -528,7 +528,7 @@ window.PFAgent = (() => {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    PFApp && PFApp.toast && PFApp.toast("فایل ZIP دانلود شد ⬇");
+    PFApp && PFApp.toast && PFApp.toast("ZIP downloaded ⬇");
   }
 
   /* ------------------------------------------------ tabs & wiring */
@@ -559,7 +559,7 @@ window.PFAgent = (() => {
       if (!activeFile) return;
       try {
         await navigator.clipboard.writeText(files.get(activeFile) || "");
-        PFApp && PFApp.toast && PFApp.toast("کپی شد ✓");
+        PFApp && PFApp.toast && PFApp.toast("Copied ✓");
       } catch { /* clipboard unavailable */ }
     });
     $("btnCloseFile").addEventListener("click", closeFile);

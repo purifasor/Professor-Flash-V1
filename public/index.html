@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Professor Flash V1">
-<title>Professor Flash V1 — هوش مصنوعی و عامل کدنویس</title>
-<meta name="description" content="هوش مصنوعی رایگان و آنلاین: چت هوشمند با جستجوی وب و عامل کدنویس چندفایلی با پیش‌نمایش زنده و دانلود ZIP. بدون نصب، بدون ثبت‌نام.">
+<meta name="apple-mobile-web-app-title" content="Professor AI">
+<title>Professor AI — intelligent chat & coding agent</title>
+<meta name="description" content="Professor AI — free online AI with live data (prices, gold, world clocks), web search, and a multi-agent coding builder with live preview.">
 <meta name="theme-color" content="#040302">
 <link rel="icon" type="image/png" sizes="64x64" href="/assets/favicon-64.png">
 <link rel="apple-touch-icon" href="/assets/logo-128.png">
@@ -26,68 +26,112 @@
   <div class="bg-scan"></div>
 </div>
 
-<div class="app" id="app" data-mode="chat" data-side="open">
+<!-- ============================ auth screen ============================ -->
+<div class="auth-screen" id="authScreen" hidden>
+  <div class="auth-card">
+    <div class="auth-logo">
+      <img src="/assets/logo.png" alt="Professor AI" width="64" height="64" draggable="false">
+    </div>
+    <h1>Professor AI</h1>
+    <p class="auth-sub" id="authSub">Welcome back. Sign in to continue.</p>
 
-  <!-- ============================ sidebar ============================ -->
-  <aside class="sidebar" id="sidebar" aria-label="تاریخچه گفتگوها">
+    <form id="authForm" autocomplete="on">
+      <div class="auth-fields" id="authFields">
+        <label class="auth-field" id="fieldUsername" hidden>
+          <span>Username</span>
+          <input type="text" id="authUsername" autocomplete="username" spellcheck="false">
+        </label>
+        <label class="auth-field">
+          <span>Email</span>
+          <input type="email" id="authEmail" required autocomplete="email" spellcheck="false" placeholder="you@example.com">
+        </label>
+        <label class="auth-field">
+          <span>Password</span>
+          <input type="password" id="authPassword" required autocomplete="current-password" placeholder="••••••••">
+        </label>
+      </div>
+      <button class="auth-submit" id="authSubmit" type="submit">Sign in</button>
+    </form>
+
+    <div class="auth-divider"><span>or</span></div>
+
+    <button class="auth-google" id="authGoogle">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.63v3h3.87c2.26-2.08 3.57-5.15 3.57-8.82z"/>
+        <path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3c-1.07.72-2.44 1.15-4.07 1.15-3.13 0-5.78-2.11-6.72-4.96H1.29v3.1A12 12 0 0 0 12 24z"/>
+        <path fill="#FBBC05" d="M5.28 14.28A7.2 7.2 0 0 1 4.9 12c0-.79.14-1.56.38-2.28v-3.1H1.29a12 12 0 0 0 0 10.76l3.99-3.1z"/>
+        <path fill="#EA4335" d="M12 4.76c1.76 0 3.34.6 4.58 1.8l3.44-3.44A11.98 11.98 0 0 0 12 0 12 12 0 0 0 1.29 6.62l3.99 3.1C6.22 6.87 8.87 4.76 12 4.76z"/>
+      </svg>
+      Continue with Google
+    </button>
+
+    <div class="auth-switch">
+      <span id="authSwitchText">No account yet?</span>
+      <button type="button" id="authSwitchBtn">Create one</button>
+    </div>
+    <div class="auth-error" id="authError" hidden></div>
+  </div>
+</div>
+
+<!-- ============================ app ============================ -->
+<div class="app" id="app" data-mode="chat" data-side="open" hidden>
+
+  <!-- sidebar -->
+  <aside class="sidebar" id="sidebar" aria-label="Conversations">
     <div class="side-head">
-      <div class="logo" title="Professor Flash V1">
-        <img src="/assets/logo.png" alt="نشان Professor Flash V1" width="38" height="38" draggable="false">
+      <div class="logo" title="Professor AI">
+        <img src="/assets/logo.png" alt="Professor AI logo" width="38" height="38" draggable="false">
       </div>
       <div class="brand-text">
-        <strong>Professor Flash V1</strong>
-        <small>PROFESSOR&nbsp;FLASH&nbsp;V1</small>
+        <strong>Professor AI</strong>
+        <small>PROFESSOR&nbsp;AI</small>
       </div>
-      <button class="side-x" id="btnCloseSide" aria-label="بستن منو">✕</button>
+      <button class="side-x" id="btnCloseSide" aria-label="Close menu">✕</button>
     </div>
 
     <button class="new-chat" id="btnNew">
       <svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-      گفتگوی جدید
+      New chat
     </button>
 
-    <div class="side-label">تاریخچه گفتگوها</div>
+    <div class="side-label">Conversations</div>
     <nav class="session-list" id="sessionList"></nav>
 
     <div class="side-foot">
-      <div class="side-engines">PROFESSOR STACK — FUSED BRAIN · FREE · ONLINE</div>
+      <button class="profile-btn" id="btnProfile">
+        <span class="pb-avatar" id="pbAvatar">P</span>
+        <span class="pb-name" id="pbName">Account</span>
+        <svg viewBox="0 0 24 24" width="14" height="14"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   </aside>
 
-  <!-- ============================ stage ============================ -->
+  <!-- stage -->
   <div class="stage">
-
     <header class="topbar">
-      <button class="icon-btn only-mobile" id="btnOpenSide" aria-label="منو">
+      <button class="icon-btn only-mobile" id="btnOpenSide" aria-label="Menu">
         <svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
       </button>
-      <button class="icon-btn only-desktop" id="btnToggleSide" aria-label="جمع کردن / باز کردن منو" title="جمع کردن / باز کردن منو">
+      <button class="icon-btn only-desktop" id="btnToggleSide" aria-label="Toggle sidebar" title="Toggle sidebar">
         <svg viewBox="0 0 24 24" width="16" height="16"><path d="M15 6l-6 6 6 6M9 4v16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
 
-      <div class="mode-switch" id="modeSwitch" data-active="chat" role="tablist" aria-label="حالت">
+      <div class="mode-switch" id="modeSwitch" data-active="chat" role="tablist" aria-label="Mode">
         <span class="mode-thumb" aria-hidden="true"></span>
         <button class="mode-btn active" id="btnModeChat" data-mode="chat" role="tab" aria-selected="true">
           <svg viewBox="0 0 24 24" width="15" height="15"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          چت هوشمند
+          Chat
         </button>
         <button class="mode-btn" id="btnModeAgent" data-mode="agent" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" width="15" height="15"><path d="M8 6 L3 12 l5 6 M16 6 l5 6 -5 6 M13 4 l-2 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          عامل کدنویس
+          Coding Agent
         </button>
       </div>
 
-      <div class="engine-picker" role="group" aria-label="موتور فکری" title="انتخاب موتور فکری — کیفیت اول">
-        <span class="engine-led" aria-hidden="true"></span>
-        <span class="engine-label" id="engineLabel">مغز حداکثری</span>
-        <button class="engine-btn active" id="engineMax" title="مغز حداکثری — استدلال بالا + بازبینی دومرحله‌ای">MAX</button>
-        <button class="engine-btn" id="engineAgent" title="موتور تخصصی کدنویسی">CODE</button>
-      </div>
-
       <div class="top-actions">
-        <button class="icon-chip" id="btnSearch" title="جستجوی زنده در وب" aria-pressed="false">
+        <button class="icon-chip" id="btnSearch" title="Live web search" aria-pressed="false">
           <svg viewBox="0 0 24 24" width="14" height="14"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>جستجوی وب</span>
+          <span>Web search</span>
         </button>
       </div>
     </header>
@@ -99,86 +143,74 @@
         <div class="messages" id="messages">
           <div class="hero" id="hero">
             <div class="hero-logo">
-              <img src="/assets/logo.png" alt="Professor Flash V1" width="76" height="76" draggable="false">
+              <img src="/assets/logo.png" alt="Professor AI" width="76" height="76" draggable="false">
             </div>
-            <h1>Professor Flash V1</h1>
-            <span class="hero-tag">PROFESSOR&nbsp;STACK&nbsp;//&nbsp;FREE&nbsp;·&nbsp;ONLINE&nbsp;·&nbsp;NO&nbsp;SIGNUP</span>
-            <p class="hero-sub">هوش مصنوعی زنده با مغز ترکیبی قدرتمند — می‌فهمد، استدلال می‌کند، بحث می‌کند، می‌سازد.<br>هر پاسخ تازه و برای همان لحظه تو ساخته می‌شود؛ نه از پیش آماده.</p>
-            <div class="hero-cards">
-              <button class="hero-card" data-mode="chat" data-prompt="ساختار یک وب‌سایت فروشگاهی به چه شکل هست؟ رسم کن و بهترین شکل توضیح بده.">
-                <span class="hc-ico">💬</span>
-                <span class="hc-t">چت هوشمند</span>
-                <span class="hc-d">پاسخ تازه و استدلال‌شده — نه متن آماده</span>
-              </button>
-              <button class="hero-card" data-mode="agent" data-prompt="یک بازی شوتر اول‌شخص سه‌بعدی مثل کانتر استرایک بساز؛ WASD برای حرکت، کلیک چپ شلیک، کلیک راست نشانه‌گیری، دشمن، HUD و امتیاز — تم دارک نئون قرمز.">
-                <span class="hc-ico">⚡</span>
-                <span class="hc-t">عامل کدنویس</span>
-                <span class="hc-d">ساخت برنامه چندفایلی + پیش‌نمایش زنده + ZIP</span>
-              </button>
-              <button class="hero-card" data-mode="chat" data-search="1" data-prompt="قیمت امروز دلار و بیت‌کوین چقدر است؟ با تحلیل کوتاه نوسانات.">
-                <span class="hc-ico">🌐</span>
-                <span class="hc-t">جستجوی وب</span>
-                <span class="hc-d">دانش زنده از اینترنت برای قیمت‌ها و اخبار</span>
-              </button>
-            </div>
-            <div class="hero-engines">BRAIN: <b>Professor Stack</b> — fused multi-model reasoning — FREE</div>
+            <h1>Professor AI</h1>
+            <span class="hero-tag">LIVE&nbsp;DATA&nbsp;·&nbsp;EVERY&nbsp;LANGUAGE&nbsp;·&nbsp;CODING&nbsp;AGENT&nbsp;·&nbsp;FREE</span>
+            <p class="hero-sub">Intelligent chat with live prices, gold, world clocks and web search —<br>plus a multi-agent coding builder with live preview and ZIP export.</p>
           </div>
         </div>
 
         <footer class="composer-wrap">
+          <div class="model-picker-bar" id="modelPickerBar">
+            <div class="mp-label">Model</div>
+            <div class="mp-options" id="modelOptions">
+              <button class="mp-option active" data-provider="">Default</button>
+            </div>
+          </div>
           <div class="composer" id="composer">
-            <textarea id="input" rows="1" placeholder="پیامت را بنویس… (Enter = ارسال، Shift+Enter = خط جدید)" aria-label="پیام"></textarea>
-            <button class="send-btn stop" id="btnStop" type="button" title="توقف" aria-label="توقف پاسخ" hidden>
+            <textarea id="input" rows="1" placeholder="Write your message… (Enter = send, Shift+Enter = new line)" aria-label="Message"></textarea>
+            <button class="send-btn stop" id="btnStop" type="button" title="Stop" aria-label="Stop" hidden>
               <svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>
             </button>
-            <button class="send-btn" id="btnSend" type="button" title="ارسال" aria-label="ارسال پیام" disabled>
+            <button class="send-btn" id="btnSend" type="button" title="Send" aria-label="Send" disabled>
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3.4 20.4 22 12 3.4 3.6l3.2 7L15 12l-8.4 1.4z" fill="currentColor"/></svg>
             </button>
           </div>
-          <div class="composer-hint" id="composerHint">مدل‌های قوی و رایگان · پاسخ تازه، نه آماده · <b>مغز متصل به گیت‌هاب</b></div>
+          <div class="composer-hint" id="composerHint">Live prices &amp; time data · fresh answers, never canned · <b>your history stays private</b></div>
         </footer>
       </section>
 
-      <!-- workbench (agent mode only) -->
+      <!-- workbench (agent mode) -->
       <section class="bench" id="bench" hidden>
         <div class="bench-bar">
           <div class="bench-tabs">
             <button class="bench-tab active" data-tab="preview" id="tabPreview">
               <svg viewBox="0 0 24 24" width="14" height="14"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-              پیش‌نمایش زنده
+              Live preview
             </button>
             <button class="bench-tab" data-tab="files" id="tabFiles">
               <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-              فایل‌ها <span class="file-count" id="fileCount">0</span>
+              Files <span class="file-count" id="fileCount">0</span>
             </button>
             <button class="bench-tab" data-tab="console" id="tabConsole">
               <svg viewBox="0 0 24 24" width="14" height="14"><path d="m7 9 3 3-3 3M13 15h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="4" width="20" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-              کنسول <span class="file-count" id="consoleCount">0</span>
+              Console <span class="file-count" id="consoleCount">0</span>
             </button>
           </div>
           <div class="bench-actions">
-            <div class="dev-switch" id="devSwitch" title="اندازه پیش‌نمایش">
-              <button class="dev-btn active" data-device="desktop" title="دسکتاپ">
+            <div class="dev-switch" id="devSwitch" title="Preview size">
+              <button class="dev-btn active" data-device="desktop" title="Desktop">
                 <svg viewBox="0 0 24 24" width="15" height="15"><rect x="2" y="4" width="20" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
               </button>
-              <button class="dev-btn" data-device="tablet" title="تبلت">
+              <button class="dev-btn" data-device="tablet" title="Tablet">
                 <svg viewBox="0 0 24 24" width="15" height="15"><rect x="4" y="2" width="16" height="20" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M10 18.5h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
               </button>
-              <button class="dev-btn" data-device="mobile" title="موبایل">
+              <button class="dev-btn" data-device="mobile" title="Mobile">
                 <svg viewBox="0 0 24 24" width="15" height="15"><rect x="7" y="2" width="10" height="20" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M11 18.5h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
               </button>
             </div>
-            <button class="tool-btn" id="btnFixErrors" title="رفع خودکار خطاهای پیش‌نمایش" hidden>
+            <button class="tool-btn" id="btnFixErrors" title="Auto-fix preview errors" hidden>
               <svg viewBox="0 0 24 24" width="13" height="13"><path d="m14.5 5.5 4 4L8 20H4v-4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m12.5 7.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-              رفع خطا
+              Fix errors
             </button>
-            <button class="tool-btn" id="btnRefreshPreview" title="تازه‌سازی پیش‌نمایش">
+            <button class="tool-btn" id="btnRefreshPreview" title="Refresh preview">
               <svg viewBox="0 0 24 24" width="13" height="13"><path d="M20 12a8 8 0 1 1-2.9-6.2M20 3v5h-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <button class="tool-btn" id="btnOpenPreview" title="باز کردن در تب جدید" disabled>
+            <button class="tool-btn" id="btnOpenPreview" title="Open in new tab" disabled>
               <svg viewBox="0 0 24 24" width="13" height="13"><path d="M14 4h6v6M20 4 11 13M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <button class="tool-btn accent" id="btnZip" title="دانلود همه فایل‌ها به صورت ZIP" disabled>
+            <button class="tool-btn accent" id="btnZip" title="Download all files as ZIP" disabled>
               <svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
               ZIP
             </button>
@@ -189,17 +221,12 @@
           <div class="bench-pane active" id="panePreview">
             <div class="preview-empty" id="previewEmpty">
               <div class="pe-sigil"><img src="/assets/logo.png" alt="" width="44" height="44" draggable="false"></div>
-              <h3>کارگاه عامل کدنویس</h3>
-              <p>بگو چه برنامه‌ای می‌خواهی — عامل با نهایت توان مدل، پروژه را به صورت چندفایلی سازمان‌دهی می‌کند،<br>این‌جا اجراش می‌کند، خطاها را می‌بیند و خودش رفع می‌کند و می‌توانی یک‌جا دانلودش کنی.</p>
-              <div class="pe-examples">
-                <button class="pe-chip" data-prompt="یک بازی مار کلاسیک با تم نئون قرمز و دارک بساز؛ با امتیاز، رکورد، کنترل کیبورد و لمسی و افکت‌های نرم. ساختار چندفایلی تمیز.">🐍 بازی مار</button>
-                <button class="pe-chip" data-prompt="یک ماشین‌حساب مهندسی با تم دارک نئون قرمز بساز؛ با تاریخچه محاسبات و پشتیبانی کامل از کیبورد. ساختار چندفایلی تمیز.">🧮 ماشین‌حساب</button>
-                <button class="pe-chip" data-prompt="یک بازی شوتر اول‌شخص سه‌بعدی مثل کانتر استرایک بساز؛ WASD حرکت، کلیک چپ شلیک، کلیک راست نشانه‌گیری، دشمن‌ها، HUD و امتیاز — تم دارک نئون قرمز.">🎮 شوتر اول‌شخص</button>
-              </div>
+              <h3>Coding Agent Workshop</h3>
+              <p>Describe the app you want — the agent team plans, builds a multi-file project,<br>runs it here, catches errors and fixes them. Download everything as ZIP.</p>
             </div>
             <div class="preview-stage" id="previewStage" data-device="desktop" hidden>
               <div class="preview-device">
-                <iframe id="previewFrame" title="پیش‌نمایش" sandbox="allow-scripts allow-modals allow-forms allow-downloads allow-popups allow-pointer-lock" referrerpolicy="no-referrer"></iframe>
+                <iframe id="previewFrame" title="Live preview" sandbox="allow-scripts allow-modals allow-forms allow-downloads allow-popups allow-pointer-lock" referrerpolicy="no-referrer"></iframe>
               </div>
             </div>
             <div class="preview-status" id="previewStatus" hidden></div>
@@ -209,19 +236,19 @@
             <div class="file-tree" id="fileTree"></div>
             <div class="file-view placeholder" id="fileView">
               <div class="file-view-head">
-                <span class="fv-name" id="fileViewName">فایلی انتخاب نشده</span>
-                <button class="tool-btn" id="btnCopyFile" hidden>کپی</button>
-                <button class="tool-btn" id="btnCloseFile" title="بستن فایل (Esc)" hidden>✕ بستن</button>
+                <span class="fv-name" id="fileViewName">No file selected</span>
+                <button class="tool-btn" id="btnCopyFile" hidden>Copy</button>
+                <button class="tool-btn" id="btnCloseFile" title="Close file (Esc)" hidden>✕ Close</button>
               </div>
-              <pre class="file-code"><code id="fileViewCode"></code><span class="fv-placeholder" id="fvPlaceholder">روی یک فایل بزن تا محتواش را این‌جا ببینی.</span></pre>
+              <pre class="file-code"><code id="fileViewCode"></code><span class="fv-placeholder" id="fvPlaceholder">Click a file to view its content.</span></pre>
             </div>
           </div>
 
           <div class="bench-pane" id="paneConsole" hidden>
             <div class="console-wrap">
               <div class="console-head">
-                <span class="con-title">کنسول اجرا — خروجی زندهٔ برنامه در پیش‌نمایش</span>
-                <button class="tool-btn" id="btnClearConsole">پاک کردن</button>
+                <span class="con-title">Runtime console — live output of your preview</span>
+                <button class="tool-btn" id="btnClearConsole">Clear</button>
               </div>
               <div class="console-box" id="consoleBox"></div>
             </div>
@@ -231,11 +258,119 @@
     </main>
   </div>
 
-  <!-- mobile workbench toggle -->
   <button class="bench-fab" id="benchFab" hidden>
     <svg viewBox="0 0 24 24" width="15" height="15"><rect x="2" y="4" width="20" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-    کارگاه <span class="file-count" id="fabCount">0</span>
+    Workshop <span class="file-count" id="fabCount">0</span>
   </button>
+</div>
+
+<!-- ============================ profile modal ============================ -->
+<div class="modal-backdrop" id="profileModal" hidden>
+  <div class="modal" role="dialog" aria-label="Profile">
+    <div class="modal-head">
+      <div class="pm-title">
+        <span class="pm-avatar" id="pmAvatar">P</span>
+        <div>
+          <strong id="pmName">Account</strong>
+          <small id="pmEmail">—</small>
+        </div>
+      </div>
+      <button class="icon-btn" id="btnCloseProfile" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="mtab active" data-ptab="profile" id="ptabProfile">Profile</button>
+      <button class="mtab" data-ptab="providers" id="ptabProviders">Providers</button>
+      <button class="mtab" data-ptab="danger" id="ptabDanger">Danger zone</button>
+    </div>
+
+    <!-- Profile tab -->
+    <div class="modal-pane active" id="ppaneProfile">
+      <div class="pfield"><span>Username</span><b id="pfUsername">—</b></div>
+      <div class="pfield"><span>Email</span><b id="pfEmail">—</b></div>
+      <div class="pfield"><span>Sign-in method</span><b id="pfProvider">—</b></div>
+      <div class="pfield"><span>Member since</span><b id="pfCreated">—</b></div>
+      <div class="pfield"><span>Stored chats</span><b id="pfChats">—</b></div>
+      <div class="pfield"><span>Custom providers</span><b id="pfModels">—</b></div>
+      <div class="psection">Settings</div>
+      <label class="psetting">
+        <span>Web search default</span>
+        <input type="checkbox" id="setSearch">
+      </label>
+      <label class="psetting">
+        <span>Live data (prices &amp; time)</span>
+        <input type="checkbox" id="setLive" checked disabled>
+      </label>
+    </div>
+
+    <!-- Providers tab -->
+    <div class="modal-pane" id="ppaneProviders" hidden>
+      <div class="prov-default" id="provDefault">
+        <div class="pd-head">
+          <span class="pd-dot"></span>
+          <strong>Default</strong>
+          <span class="pd-badge">built-in</span>
+        </div>
+        <p class="pd-sub">The Professor engine — strongest free reasoning models, live data, web search. Always available.</p>
+      </div>
+      <div id="provList"></div>
+      <button class="add-provider" id="btnAddProvider">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+        Add Provider
+      </button>
+    </div>
+
+    <!-- Danger tab -->
+    <div class="modal-pane" id="ppaneDanger" hidden>
+      <p class="danger-note">Clearing history permanently deletes ALL your saved conversations. This cannot be undone.</p>
+      <button class="danger-btn" id="btnClearHistory">Clear all chat history</button>
+      <div class="confirm-box" id="clearConfirm" hidden>
+        <p>Are you sure you want to permanently delete all your chat history?</p>
+        <div class="confirm-actions">
+          <button id="btnConfirmClear" class="danger-btn solid">Yes, delete everything</button>
+          <button id="btnCancelClear" class="tool-btn">Cancel</button>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <button class="logout-btn" id="btnLogout">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Provider modal -->
+<div class="modal-backdrop" id="providerModal" hidden>
+  <div class="modal narrow" role="dialog" aria-label="Add provider">
+    <div class="modal-head">
+      <div class="pm-title"><strong>Add Provider</strong></div>
+      <button class="icon-btn" id="btnCloseProvider" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-pane active">
+      <label class="psetting col">
+        <span>Display name</span>
+        <input type="text" id="provName" placeholder="My GPT">
+      </label>
+      <label class="psetting col">
+        <span>Base URL</span>
+        <input type="text" id="provBaseUrl" placeholder="https://api.example.com/v1" dir="ltr" spellcheck="false">
+      </label>
+      <label class="psetting col">
+        <span>API key</span>
+        <input type="text" id="provApiKey" placeholder="sk-…" dir="ltr" spellcheck="false" autocomplete="off">
+      </label>
+      <label class="psetting col">
+        <span>Model name</span>
+        <input type="text" id="provModelName" placeholder="GPT-6 Astra" dir="ltr" spellcheck="false">
+      </label>
+      <label class="psetting col">
+        <span>Model ID</span>
+        <input type="text" id="provModelId" placeholder="gpt-6-astra" dir="ltr" spellcheck="false">
+      </label>
+      <div class="prov-actions">
+        <button class="tool-btn" id="btnTestProvider">Test connection</button>
+        <button class="add-provider solid" id="btnSaveProvider">Save provider</button>
+      </div>
+      <div class="prov-test-result" id="provTestResult" hidden></div>
+    </div>
+  </div>
 </div>
 
 <div class="side-backdrop" id="sideBackdrop"></div>
@@ -245,8 +380,10 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+<script src="/js/auth.js" defer></script>
 <script src="/js/markdown.js" defer></script>
 <script src="/js/agent.js" defer></script>
+<script src="/js/profile.js" defer></script>
 <script src="/js/app.js" defer></script>
 </body>
 </html>
