@@ -98,13 +98,30 @@ window.PFAuth = (() => {
     }
   }
 
-  function googleSignIn() {
-    // Google Identity Services — client ID set at deploy time via meta tag.
-    // When configured, initialize + show One Tap. When not configured, try a
-    // keyless One Tap prompt (some GIS builds work without explicit init);
-    // if GIS is entirely unavailable, guide the user to email+password
-    // instead of showing a raw error.
-    const clientId = document.querySelector('meta[name="google-client-id"]')?.content;
+  let googleClientId = null;
+
+  async function loadGoogleConfig() {
+    if (googleClientId) return googleClientId;
+    try {
+      const r = await fetch("/api/bootstrap", { headers: { "Cache-Control": "no-store" } });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.googleClientId) {
+          googleClientId = d.googleClientId;
+          const meta = document.querySelector('meta[name="google-client-id"]');
+          if (meta) meta.content = googleClientId;
+        }
+      }
+    } catch { /* offline — fall back to keyless prompt */ }
+    return googleClientId;
+  }
+
+  async function googleSignIn() {
+    // Google Identity Services — client ID comes from /api/bootstrap
+    // (GOOGLE_CLIENT_ID env var at deploy time). With a client ID we run a
+    // proper One Tap flow; without it GIS can still show a keyless prompt
+    // on some setups, and if GIS is unavailable we guide the user clearly.
+    const clientId = await loadGoogleConfig();
     const gis = window.google?.accounts?.id;
     if (gis && clientId) {
       gis.initialize({

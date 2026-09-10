@@ -18,6 +18,19 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** Resolve a repo-root-relative path both locally and on Vercel (bundled). */
+function rootPath(rel) {
+  // when bundled, cwd is the function root and brain/ is included there
+  const viaCwd = path.join(process.cwd(), ...rel.split("/"));
+  if (fs.existsSync(viaCwd)) return viaCwd;
+  // dev / repo checkout: api/_lib → two levels up
+  return path.join(HERE, "..", "..", ...rel.split("/"));
+}
+
 import {
   fetchTimeout,
   sleep,
@@ -76,9 +89,7 @@ export function getRoster() {
   const candidates = ["brain/models.json", "Model/models.json"];
   for (const rel of candidates) {
     try {
-      const parsed = JSON.parse(
-        fs.readFileSync(path.join(process.cwd(), ...rel.split("/")), "utf8")
-      );
+      const parsed = JSON.parse(fs.readFileSync(rootPath(rel), "utf8"));
       if (parsed && Array.isArray(parsed.providers) && parsed.providers.length) {
         data = {
           providers: parsed.providers,

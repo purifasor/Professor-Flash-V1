@@ -5,6 +5,16 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** Resolve a repo-root-relative path both locally and on Vercel (bundled). */
+function rootPath(rel) {
+  const viaCwd = path.join(process.cwd(), ...rel.split("/"));
+  if (fs.existsSync(viaCwd)) return viaCwd;
+  return path.join(HERE, "..", "..", ...rel.split("/"));
+}
 
 const EMBEDDED = {
   persona:
@@ -29,7 +39,7 @@ function readSafe(rel) {
   const candidates = [rel, rel.replace(/^brain\//, "")]; // new layout, legacy fallback
   for (const c of candidates) {
     try {
-      return fs.readFileSync(path.join(process.cwd(), ...c.split("/")), "utf8");
+      return fs.readFileSync(rootPath(c), "utf8");
     } catch {
       /* try next */
     }
@@ -39,7 +49,7 @@ function readSafe(rel) {
 
 function readJson(rel) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(process.cwd(), ...rel.split("/")), "utf8"));
+    return JSON.parse(fs.readFileSync(rootPath(rel), "utf8"));
   } catch {
     return null;
   }
