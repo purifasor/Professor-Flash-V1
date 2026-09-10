@@ -46,9 +46,27 @@ window.PFProfile = (() => {
       el.className = "prov-default custom";
       el.innerHTML =
         `<div class="pd-head"><span class="pd-dot on"></span><strong>${PFMD.esc(p.name || p.modelId)}</strong>` +
-        `<span class="pd-badge">custom</span></div>` +
+        `<span class="pd-badge">custom</span>` +
+        `<button class="prov-del" type="button" title="Remove provider" aria-label="Remove provider">✕</button></div>` +
         `<p class="pd-sub" dir="ltr">${PFMD.esc(p.modelName || p.modelId)} · ${PFMD.esc(p.baseUrl)}</p>`;
+      el.querySelector(".prov-del").addEventListener("click", () => removeProvider(p));
       list.appendChild(el);
+    }
+  }
+
+  async function removeProvider(p) {
+    const name = p.name || p.modelId;
+    if (!confirm(`Remove this provider?\n\n"${name}"\n\nChats keep working — the default engine takes over.`)) return;
+    try {
+      await api("/api/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", name }),
+      });
+      if (window.PFApp) PFApp.toast("Provider removed");
+      await load(user);
+    } catch (e) {
+      if (window.PFApp) PFApp.toast(e.message || "Could not remove provider");
     }
   }
 

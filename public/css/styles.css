@@ -1490,6 +1490,24 @@ img { display: block; max-width: 100%; }
 }
 .pd-sub { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.7; }
 
+/* per-provider remove button (profile → providers tab) */
+.prov-del {
+  width: 24px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  font-size: 12px; line-height: 1;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  transition: all 0.18s;
+}
+.prov-del:hover {
+  color: #ff6b5e;
+  border-color: var(--border-red);
+  background: var(--red-soft);
+}
+
 .add-provider {
   width: 100%;
   display: flex; align-items: center; justify-content: center; gap: 8px;

@@ -2,7 +2,7 @@
 // POST /api/providers with action=test runs a live connection test.
 
 import { currentUser } from "./_lib/auth.js";
-import { saveModel, listModels } from "./_lib/db.js";
+import { saveModel, listModels, deleteModel } from "./_lib/db.js";
 import { testProvider } from "./_lib/remote.js";
 import { slugify } from "./_lib/db.js";
 
@@ -58,6 +58,20 @@ export default async function handler(req, res) {
     }
     await saveModel(user.folder, record);
     return res.status(200).json({ ok: true, provider: record });
+  }
+
+  // ---- delete provider (per-user: only from THIS user's folder) ----
+  if (body.action === "delete") {
+    const target = String(body.name || body.modelId || "").trim();
+    if (!target) {
+      return res.status(400).json({ error: "missing-fields", message: "Provider name is required." });
+    }
+    const deleted = await deleteModel(user.folder, target);
+    if (!deleted) {
+      return res.status(404).json({ error: "not-found", message: "Provider not found." });
+    }
+    const providers = await listModels(user.folder).catch(() => []);
+    return res.status(200).json({ ok: true, deleted: true, providers });
   }
 
   return res.status(400).json({ error: "unknown-action" });

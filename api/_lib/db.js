@@ -316,6 +316,20 @@ export async function listModels(folder) {
   return out;
 }
 
+/**
+ * Delete ONE of the user's saved providers by name/modelId.
+ * Per-user by construction: the record lives in the user's own folder —
+ * other users' providers are never touched.
+ */
+export async function deleteModel(folder, nameOrId) {
+  const slug = slugify(nameOrId);
+  const target = `${folder}/Models/${slug}.txt`;
+  const entries = await listDir(`${folder}/Models`).catch(() => []);
+  if (!entries.some((e) => e.type === "file" && e.path === target)) return false;
+  await deleteFile(target, `model removed: ${folder} ${slug}`);
+  return true;
+}
+
 /** Describe a user's folder contents (counts) for profile display. */
 export async function folderStats(folder) {
   const root = await listDir(folder);

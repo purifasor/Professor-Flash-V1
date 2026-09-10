@@ -128,29 +128,30 @@ export default async function handler(req, res) {
     }
 
     const finalMessages = [];
-    if (custom) {
+
+    const runCustomProvider = async () => {
       // Custom provider path: same brain, user's engine, direct streaming.
       const sys = mode === "agent" ? agentSystemPrompt() : chatSystemPrompt(lastUser);
-      finalMessages.push({ role: "system", content: sys });
+      const msgs = [{ role: "system", content: sys }];
 
       if (mode === "chat") {
         // live data works for custom providers too
         try {
           const live = await gatherLiveData(lastUser);
-          if (live) finalMessages.push({ role: "system", content: live });
+          if (live) msgs.push({ role: "system", content: live });
         } catch { /* best-effort */ }
         try {
           const searchData = await searchWeb(lastUser);
           const ctx = searchContext(searchData);
-          if (ctx) finalMessages.push({ role: "system", content: ctx });
+          if (ctx) msgs.push({ role: "system", content: ctx });
         } catch { /* best-effort */ }
       }
 
       if (mode === "agent") {
         const filesCtx = filesContextMessage(body.files);
-        if (filesCtx) finalMessages.push({ role: "system", content: filesCtx });
+        if (filesCtx) msgs.push({ role: "system", content: filesCtx });
         if (Array.isArray(body.errors) && body.errors.length) {
-          finalMessages.push({
+          msgs.push({
             role: "system",
             content:
               "RUNTIME ERRORS captured in the user's live preview. Run the debugging " +
@@ -161,7 +162,7 @@ export default async function handler(req, res) {
           });
         }
       }
-      finalMessages.push(...messages);
+      msgs.push(...messages);
 
       let collected = "";
       try {
@@ -170,7 +171,7 @@ export default async function handler(req, res) {
             baseUrl: custom.baseUrl,
             apiKey: custom.apiKey,
             modelId: custom.modelId,
-            messages: finalMessages,
+            messages: msgs,
             temperature: mode === "agent" ? 0.3 : 0.5,
             maxTokens: mode === "agent" ? 30000 : 4096,
             signal: abort.signal,
@@ -194,7 +195,7 @@ export default async function handler(req, res) {
                 apiKey: custom.apiKey,
                 modelId: custom.modelId,
                 messages: [
-                  ...finalMessages,
+                  ...msgs,
                   { role: "assistant", content: text },
                   {
                     role: "user",
@@ -214,7 +215,6 @@ export default async function handler(req, res) {
             text = collected;
             if (!repair.trim()) break; // provider gave nothing — stop looping
           }
-          collected = text;
         }
         sseSend(res, {
           type: "done",
@@ -222,15 +222,17 @@ export default async function handler(req, res) {
           model: custom.modelId,
           search: null,
         });
+        return true; // success — the default engine is not needed
       } catch (e) {
-        sseSend(res, {
-          type: "error",
-          message: `Provider error: ${String(e.message || e).slice(0, 200)}`,
-          red: true,
-        });
+        // The user's provider failed (bad/expired key, rate limit, outage…).
+        // Never dead-end the conversation: fall back to the default
+        // Professor engine chain so the user ALWAYS gets an answer.
+        status(`Your provider failed (${String(e.message || e).slice(0, 80)}) — switching to the default engine…`);
+        return false;
       }
-      return;
-    }
+    };
+
+    if (custom && (await runCustomProvider())) return;
 
     // ---------- default Professor engine ----------
     const sys = mode === "agent" ? agentSystemPrompt() : chatSystemPrompt(lastUser);

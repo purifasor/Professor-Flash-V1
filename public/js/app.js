@@ -324,6 +324,22 @@ window.PFApp = (() => {
     return p ? p.name || p.modelId : v;
   }
 
+  // Called by profile.js after providers load/delete — keeps the model
+  // picker in sync. If the user's chosen provider was removed, gracefully
+  // fall back to the default engine (never a dead selection).
+  function setProviders(list) {
+    providers = Array.isArray(list) ? list : [];
+    const stillThere = (v) => !v || providers.some((x) => (x.name || x.modelId) === v);
+    if (!stillThere(loadLastModel())) {
+      saveLastModel("");
+    }
+    for (const s of sessions) {
+      if (s.provider && !stillThere(s.provider)) s.provider = "";
+    }
+    saveSessions();
+    renderModelPicker();
+  }
+
   function renderModelPicker() {
     const box = $("modelOptions");
     if (!box) return;
