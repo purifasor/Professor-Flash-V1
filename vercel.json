@@ -6,7 +6,7 @@
     "api/profile.js": { "maxDuration": 120 },
     "api/providers.js": { "maxDuration": 60 },
     "api/history.js": { "maxDuration": 60 },
-    "api/search.js": { "maxDuration": 30 },
+    "api/search.js": { "maxDuration": 60 },
     "api/models.js": { "maxDuration": 10 }
   }
 }

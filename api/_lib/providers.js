@@ -1,13 +1,18 @@
 // Provider chain for Professor AI (default engine).
-// Free, keyless OpenAI-compatible providers, read live from brain/models.json.
-// Always strongest-first with reasoning ON ("maximum focus" is the only mode
-// — the MAX/CODE toggle was removed by design).
+// Roster v3 — priority chain read live from brain/models.json:
+//   1) OVH Qwen3.5-397B-A17B (default) 2) Kilo Nemotron-3-Ultra-550B
+//   3) Kilo InclusionAI Ling-3.0 → emergency relay.
 //
-// Anti-freeze measures for long agent builds:
+// Engine hardening for slow/queued providers (Nemotron-Ultra can queue for
+// minutes behind "KILO PROCESSING" SSE comments):
+//  - streaming requests only; SSE comment lines (": KILO PROCESSING") keep
+//    the connection alive and are skipped while waiting for real deltas
+//  - first-token deadlines are long (queue-tolerant) and per-mode: agent
+//    builds can wait far longer than chat turns
 //  - per-attempt timeouts + cooldowns so a stuck provider never blocks the
 //    chain; the next model takes over mid-flight
-//  - streaming kept alive; if a stream dies mid-answer, what was collected
-//    is kept and the pipeline repair passes continue from it
+//  - a stream that dies mid-answer keeps what was collected; the pipeline
+//    repair passes (chat.js) resumes from it — no total loss
 //  - models that reject reasoning params are remembered and retried with
 //    effort:low automatically
 
@@ -24,41 +29,24 @@ import {
 const FALLBACK_ROSTER = {
   providers: [
     {
-      id: "kilo",
-      label: "Kilo Gateway",
-      url: "https://api.kilo.ai/api/gateway/chat/completions",
-      type: "openai",
-      chat: [
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-3.5-lightning:free",
-        "stepfun/step-3.7-flash:free",
-        "thinkingmachines/inkling:free",
-      ],
-      agent: [
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "cohere/north-mini-code:free",
-        "poolside/laguna-s-2.1:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "stepfun/step-3.7-flash:free",
-      ],
-    },
-    {
       id: "ovh",
-      label: "OVHcloud AI",
+      label: "Professor Core",
       url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       type: "openai",
-      chat: ["gpt-oss-120b", "Qwen3-32B", "Meta-Llama-3_3-70B-Instruct"],
-      agent: [
-        "Qwen3-Coder-30B-A3B-Instruct",
-        "gpt-oss-120b",
-        "Qwen3-32B",
-        "Meta-Llama-3_3-70B-Instruct",
-      ],
+      chat: ["Qwen3.5-397B-A17B"],
+      agent: ["Qwen3.5-397B-A17B"],
+    },
+    {
+      id: "kilo",
+      label: "Professor Prime",
+      url: "https://api.kilo.ai/api/gateway/chat/completions",
+      type: "openai",
+      chat: ["nvidia/nemotron-3-ultra-550b-a55b:free", "inclusionai/ling-3.0-flash-sante:free"],
+      agent: ["nvidia/nemotron-3-ultra-550b-a55b:free", "inclusionai/ling-3.0-flash-sante:free"],
     },
     {
       id: "pollinations",
-      label: "Pollinations",
+      label: "Professor Relay",
       url: "https://text.pollinations.ai/openai",
       type: "openai",
       reasoningOff: false,
@@ -69,10 +57,12 @@ const FALLBACK_ROSTER = {
   limits: {
     chatMaxTokens: 4096,
     agentMaxTokens: 30000,
-    firstTokenDeadlineMs: 45000,
+    firstTokenDeadlineChatMs: 90000,
+    firstTokenDeadlineAgentMs: 240000,
     batchSize: 1,
-    temperatureChat: 0.7,
+    temperatureChat: 0.3,
     temperatureAgent: 0.3,
+    rateLimitCooldownS: 90,
   },
 };
 
@@ -136,7 +126,12 @@ function buildBody(prov, model, base) {
 }
 
 // ------------------------------------------------------------ streaming try
-async function* streamOpenAI({ prov, model, body, signal }) {
+// SSE stream reader that:
+//  - skips comment lines (": KILO PROCESSING" keepalives)
+//  - waits for the FIRST real content delta before enforcing the
+//    first-token deadline (queue-wait doesn't count against generation)
+//  - tolerates a dead stream mid-answer (returns what it collected)
+async function* streamOpenAI({ prov, model, body, signal, firstTokenDeadlineMs, onQueueStatus }) {
   const res = await fetchTimeout(
     prov.url,
     {
@@ -158,14 +153,37 @@ async function* streamOpenAI({ prov, model, body, signal }) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  let gotFirst = false;
+  let firstAt = 0;
+  let queuePings = 0;
+
   for (;;) {
-    const { done, value } = await reader.read();
+    // once tokens flow, keep reading until the stream ends (generation can
+    // take minutes for 30000-token agent builds — no mid-answer timeout)
+    const chunkTimeout = gotFirst ? 900000 : firstTokenDeadlineMs;
+    const read = await Promise.race([
+      reader.read(),
+      new Promise((_, rej) =>
+        setTimeout(
+          () => rej(new Error(gotFirst ? "stream-stalled" : "first-token-timeout")),
+          chunkTimeout - (gotFirst ? Date.now() - firstAt : 0)
+        )
+      ),
+    ]);
+    const { done, value } = read;
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split("\n");
     buf = lines.pop() || "";
     for (const line of lines) {
       const t = line.trim();
+      if (!t) continue;
+      if (t.startsWith(":")) {
+        // SSE comment — provider keepalive (e.g. "KILO PROCESSING")
+        queuePings++;
+        if (onQueueStatus && queuePings % 8 === 1) onQueueStatus();
+        continue;
+      }
       if (!t.startsWith("data:")) continue;
       const payload = t.slice(5).trim();
       if (payload === "[DONE]") {
@@ -185,6 +203,10 @@ async function* streamOpenAI({ prov, model, body, signal }) {
       const delta = d.choices?.[0]?.delta;
       const piece = delta?.content;
       if (typeof piece === "string" && piece) {
+        if (!gotFirst) {
+          gotFirst = true;
+          firstAt = Date.now();
+        }
         const clean = filter.push(piece);
         if (clean) yield clean;
       }
@@ -194,73 +216,37 @@ async function* streamOpenAI({ prov, model, body, signal }) {
   if (tail) yield tail;
 }
 
-// Race `models` (same provider): first to emit a content delta wins.
-async function raceStreaming(prov, models, body, { deadlineMs, signal }, onDelta) {
-  const ctrls = models.map(() => new AbortController());
-  const onOuter = () => ctrls.forEach((c) => c.abort());
-  if (signal) {
-    if (signal.aborted) onOuter();
-    else signal.addEventListener("abort", onOuter, { once: true });
-  }
-  const gens = models.map((m, i) =>
-    streamOpenAI({ prov, model: m, body, signal: ctrls[i].signal })
-  );
-  const pending = new Map();
-  gens.forEach((g, i) =>
-    pending.set(
-      i,
-      g
-        .next()
-        .then((r) => ({ i, ok: !r.done && !!r.value, value: r.value, err: null }))
-        .catch((e) => ({ i, ok: false, err: e?.message || "fail" }))
-    )
-  );
-  const deadline = sleep(deadlineMs).then(() => ({ timeout: true }));
-  const alive = new Set(models.map((_, i) => i));
-  let winner = -1;
-  let firstValue = "";
-  const errs = [];
+// Try ONE model streaming to completion. Returns { model, text } or throws.
+async function tryStreaming(prov, model, body, { firstTokenDeadlineMs, signal, onDelta, onStatus }) {
+  let collected = "";
+  const gen = streamOpenAI({
+    prov,
+    model,
+    body,
+    signal,
+    firstTokenDeadlineMs,
+    onQueueStatus: () =>
+      onStatus(`Model ${shortModel(model)} is processing (queued) — holding the line…`),
+  });
   try {
-    while (alive.size) {
-      const res = await Promise.race(
-        [...alive].map((i) => pending.get(i)).concat([deadline])
-      );
-      if (res.timeout) break;
-      alive.delete(res.i);
-      if (res.ok) {
-        winner = res.i;
-        firstValue = res.value;
-        break;
-      }
-      if (res.err) errs.push(`${models[res.i]}:${res.err}`);
+    for await (const d of gen) {
+      collected += d;
+      onDelta(d);
     }
-    if (winner < 0) {
-      const e = new Error(errs.join("|") || "no-winner");
-      e.reasoningMandatory = errs.some((x) => x.includes("reasoning-mandatory"));
-      throw e;
+  } catch (e) {
+    // mid-answer death: if we already have substantial content, keep it —
+    // the agent repair passes will resume; otherwise it's a real failure
+    if (collected.trim().length > 400) {
+      return { model, text: collected, partial: true };
     }
-    ctrls.forEach((c, i) => {
-      if (i !== winner) c.abort();
-    });
-    onDelta(firstValue);
-    let full = firstValue;
-    try {
-      for await (const d of gens[winner]) {
-        onDelta(d);
-        full += d;
-      }
-    } catch {
-      /* upstream dropped mid-stream: keep what we have */
-    }
-    return { model: models[winner], text: full };
-  } finally {
-    if (winner < 0) ctrls.forEach((c) => c.abort());
-    if (signal) signal.removeEventListener("abort", onOuter);
+    throw e;
   }
+  if (!collected.trim()) throw new Error("empty");
+  return { model, text: collected };
 }
 
 // ---------------------------------------------------------- non-stream try
-async function completeOpenAI({ prov, model, body, signal, timeoutMs = 55000 }) {
+async function completeOpenAI({ prov, model, body, signal, timeoutMs = 90000 }) {
   const res = await fetchTimeout(
     prov.url,
     {
@@ -294,11 +280,6 @@ function modelsFor(prov, mode) {
   return (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
 }
 
-function statusFor(prov, batch) {
-  const names = batch.map(shortModel).join(", ");
-  return `Connecting to ${prov.label} (${names})…`;
-}
-
 function shortModel(id) {
   return String(id).split("/").pop().replace(/:free$/, "");
 }
@@ -308,7 +289,7 @@ function* splitChunks(text, size = 28) {
 }
 
 /**
- * Generate an answer with the default engine.
+ * Generate an answer with the default engine (priority chain).
  * Returns { text, providerLabel, model }.
  */
 export async function generateAnswer({
@@ -323,6 +304,11 @@ export async function generateAnswer({
   const maxTokens = mode === "agent" ? L.agentMaxTokens : L.chatMaxTokens;
   const temperature = mode === "agent" ? L.temperatureAgent : L.temperatureChat;
   const body = { messages, temperature, max_tokens: maxTokens };
+  const firstDeadline =
+    mode === "agent"
+      ? L.firstTokenDeadlineAgentMs || 240000
+      : L.firstTokenDeadlineChatMs || 90000;
+  const cooldownS = L.rateLimitCooldownS || 90;
   const errors = [];
 
   for (const prov of roster.providers) {
@@ -330,43 +316,38 @@ export async function generateAnswer({
     const usable = models.filter((m) => !cooled(`${prov.id}:${m}`));
     const list = usable.length ? usable : models;
 
-    // 1) streaming attempts, strongest-first
-    for (let i = 0; i < list.length; i += L.batchSize) {
-      const batch = list.slice(i, i + L.batchSize);
-      onStatus(statusFor(prov, batch));
+    for (const m of list) {
+      onStatus(`Connecting to ${prov.label} (${shortModel(m)})…`);
       try {
-        let collected = "";
-        const win = await raceStreaming(
-          prov,
-          batch,
-          body,
-          { deadlineMs: L.firstTokenDeadlineMs, signal },
-          (d) => {
-            collected += d;
-            onDelta(d);
-          }
-        );
-        if (win && collected.trim()) {
-          return { text: collected, providerLabel: prov.label, model: win.model };
+        const win = await tryStreaming(prov, m, body, {
+          firstTokenDeadlineMs: firstDeadline,
+          signal,
+          onDelta,
+          onStatus,
+        });
+        if (win && win.text.trim()) {
+          return {
+            text: win.text,
+            providerLabel: prov.label,
+            model: win.model,
+            partial: !!win.partial,
+          };
         }
-        batch.forEach((m) => cool(`${prov.id}:${m}`, 20));
+        cool(`${prov.id}:${m}`, 15);
       } catch (e) {
-        errors.push(`${prov.id}/${batch.join(",")}: ${e.message}`);
+        errors.push(`${prov.id}/${m}: ${e.message}`);
         if (e.reasoningMandatory) {
-          batch.forEach((m) => REASONING_LOW.add(`${prov.id}:${m}`));
-          i -= L.batchSize;
+          REASONING_LOW.add(`${prov.id}:${m}`);
           continue;
         }
-        batch.forEach((m) =>
-          cool(`${prov.id}:${m}`, /rate-limit/.test(e.message) ? 45 : 15)
-        );
+        cool(`${prov.id}:${m}`, /rate-limit|http-429/.test(e.message) ? cooldownS : 15);
       }
     }
 
-    // 2) non-stream fallback per model
+    // non-stream fallback per model
     for (const m of list) {
       if (cooled(`${prov.id}:${m}`)) continue;
-      onStatus(statusFor(prov, [m]));
+      onStatus(`Connecting to ${prov.label} (${shortModel(m)})…`);
       try {
         const r = await completeOpenAI({ prov, model: m, body, signal });
         for (const piece of splitChunks(r.text)) {
@@ -375,7 +356,7 @@ export async function generateAnswer({
         }
         return { text: r.text, providerLabel: prov.label, model: r.routedModel };
       } catch (e) {
-        errors.push(`${prov.id}/${m}: ${e.message}`);
+        errors.push(`${prov.id}/${m}(ns): ${e.message}`);
         if (e.message === "reasoning-mandatory") {
           REASONING_LOW.add(`${prov.id}:${m}`);
           try {
@@ -387,11 +368,10 @@ export async function generateAnswer({
             return { text: r2.text, providerLabel: prov.label, model: r2.routedModel };
           } catch (e2) {
             errors.push(`${prov.id}/${m}(low): ${e2.message}`);
-            cool(`${prov.id}:${m}`, e2.message === "rate-limited" ? 45 : 15);
           }
           continue;
         }
-        cool(`${prov.id}:${m}`, e.message === "rate-limited" ? 45 : 15);
+        cool(`${prov.id}:${m}`, e.message === "rate-limited" ? cooldownS : 15);
       }
     }
   }

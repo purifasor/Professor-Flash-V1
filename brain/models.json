@@ -1,52 +1,31 @@
 {
-  "$comment": "Professor Flash brain roster v2 — free, keyless, strong models. Read live by api/_lib/providers.js; edit and push to re-tune the brain. Order = preference (quality first, batchSize 1). `brain`: the strongest reasoning slots used by the MAX engine (reasoning effort:high). `reasoningOff:false` providers get raw OpenAI params. When a model mandates reasoning it is auto-retried with effort:low and remembered.",
+  "$comment": "Professor engine roster v3 — priority chain: 1) OVH Qwen3.5-397B-A17B (default) → 2) Kilo NVIDIA Nemotron-3-Ultra-550B → 3) Kilo InclusionAI Ling-3.0 (substitute for the retired Ring-2.6-1T, same vendor family) → emergency keyless fallback. Chat deadlines are tighter than agent deadlines: Nemotron-Ultra queues for a few minutes, which the agent pipeline can absorb but chat cannot. Read live by api/_lib/providers.js; edit and push to re-tune.",
   "providers": [
     {
-      "id": "kilo",
-      "label": "Kilo Gateway",
-      "url": "https://api.kilo.ai/api/gateway/chat/completions",
-      "type": "openai",
-      "brain": [
-        "nvidia/nemotron-3-ultra-550b-a55b:free"
-      ],
-      "chat": [
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-3.5-lightning:free",
-        "stepfun/step-3.7-flash:free",
-        "thinkingmachines/inkling:free"
-      ],
-      "agent": [
-        "cohere/north-mini-code:free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "poolside/laguna-s-2.1:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "stepfun/step-3.7-flash:free"
-      ]
-    },
-    {
       "id": "ovh",
-      "label": "OVHcloud AI",
+      "label": "Professor Core",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       "type": "openai",
-      "brain": [
-        "gpt-oss-120b"
-      ],
+      "chat": ["Qwen3.5-397B-A17B"],
+      "agent": ["Qwen3.5-397B-A17B"]
+    },
+    {
+      "id": "kilo",
+      "label": "Professor Prime",
+      "url": "https://api.kilo.ai/api/gateway/chat/completions",
+      "type": "openai",
       "chat": [
-        "gpt-oss-120b",
-        "Qwen3-32B",
-        "Meta-Llama-3_3-70B-Instruct"
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "inclusionai/ling-3.0-flash-sante:free"
       ],
       "agent": [
-        "Qwen3-Coder-30B-A3B-Instruct",
-        "gpt-oss-120b",
-        "Qwen3-32B",
-        "Meta-Llama-3_3-70B-Instruct"
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "inclusionai/ling-3.0-flash-sante:free"
       ]
     },
     {
       "id": "pollinations",
-      "label": "Pollinations",
+      "label": "Professor Relay",
       "url": "https://text.pollinations.ai/openai",
       "type": "openai",
       "reasoningOff": false,
@@ -57,9 +36,11 @@
   "limits": {
     "chatMaxTokens": 4096,
     "agentMaxTokens": 30000,
-    "firstTokenDeadlineMs": 45000,
+    "firstTokenDeadlineChatMs": 90000,
+    "firstTokenDeadlineAgentMs": 240000,
     "batchSize": 1,
-    "temperatureChat": 0.7,
-    "temperatureAgent": 0.3
+    "temperatureChat": 0.3,
+    "temperatureAgent": 0.3,
+    "rateLimitCooldownS": 90
   }
 }

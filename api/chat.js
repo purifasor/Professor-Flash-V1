@@ -1,7 +1,7 @@
 // POST /api/chat — SSE streaming chat endpoint (modes: chat | agent).
-// v4: staged agent pipeline (analyze → plan → map → build) with sub-agent
-// framing, user custom-provider routing, live data injection, keepalive
-// pings, and up-to-3 contract-repair passes so long builds NEVER freeze.
+// v5: staged agent pipeline (analyze → plan → map → build) with sub-agent
+// framing, user custom-provider routing, live data + ALWAYS-ON web search,
+// keepalive pings, and contract-repair passes so long builds NEVER freeze.
 //
 // Anti-freeze strategy:
 //  - one warm-up context pass defines the plan; each build pass is a
@@ -9,10 +9,15 @@
 //  - SSE pings every 15s keep proxies from killing silent connections
 //  - CONTINUE:/truncation auto-repairs resume exactly where the model
 //    stopped, so a dropped token never kills the project
+//  - news questions get Google News headlines injected (24h awareness)
+//
+// Web search is ALWAYS ON for the default engine (the user-facing toggle
+// was removed by design): each chat turn quietly checks whether fresh web
+// context helps and injects it when found. MAX thinking is the only mode.
 
 import { generateAnswer } from "./_lib/providers.js";
 import { chatSystemPrompt, agentSystemPrompt, filesContextMessage } from "./_lib/brain.js";
-import { searchWeb, searchContext } from "./_lib/search.js";
+import { searchWeb, searchContext, newsHeadlines, newsContext } from "./_lib/search.js";
 import { gatherLiveData } from "./_lib/tools.js";
 import { streamRemote } from "./_lib/remote.js";
 import { currentUser } from "./_lib/auth.js";
@@ -22,9 +27,19 @@ import { sseSend } from "./_lib/util.js";
 const MAX_HISTORY = 16;
 const MAX_MSG_CHARS = 12000;
 const MAX_TOTAL_CHARS = 60000;
+// agent follow-ups keep more history so the model remembers the project
+const MAX_HISTORY_AGENT = 24;
 
-function sanitizeMessages(raw) {
+// questions where live web context clearly beats model memory
+const NEEDS_WEB =
+  /(news|اخبار|headline|چند ساعت پیش|24 ساعت|ساعت پیش|دیروز|yesterday|today|امروز چه|latest|newest|recent|fresh|جديد|جدید|تازه|الان|right now|current|who won|score|نتیجه|earthquake|زلزله|آتش سوزی|الحاق|ترکیه|explosion|انفجار|attack|حمله|war|جنگ|fired|استعفا|died|درگذشت|killed|election|انتخابات|released|انتشار|announcement|breach|dow jones|s&p|ناسداک|nasdaq|stock)/i;
+// news-specific (get the RSS headlines instead of a plain search)
+const NEEDS_NEWS =
+  /(اخبار|news|headline|headlines|24 ساعت گذشته|ساعت گذشته|چی شده|what happened|چه اتفاقی|کی الان الان|latest news|today'?s news|دیروز چه|امروز چه)/i;
+
+function sanitizeMessages(raw, mode) {
   if (!Array.isArray(raw)) return [];
+  const max = mode === "agent" ? MAX_HISTORY_AGENT : MAX_HISTORY;
   const msgs = raw
     .filter(
       (m) =>
@@ -33,7 +48,7 @@ function sanitizeMessages(raw) {
         typeof m.content === "string"
     )
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MSG_CHARS) }));
-  const tail = msgs.slice(-MAX_HISTORY);
+  const tail = msgs.slice(-max);
   let total = 0;
   const out = [];
   for (let i = tail.length - 1; i >= 0; i--) {
@@ -77,7 +92,7 @@ export default async function handler(req, res) {
 
   const body = await readBody(req);
   const mode = body.mode === "agent" ? "agent" : "chat";
-  const messages = sanitizeMessages(body.messages);
+  const messages = sanitizeMessages(body.messages, mode);
   if (!messages.length || messages[messages.length - 1].role !== "user") {
     res.status(400).json({ error: "no-user-message" });
     return;
@@ -118,6 +133,19 @@ export default async function handler(req, res) {
       const sys = mode === "agent" ? agentSystemPrompt() : chatSystemPrompt(lastUser);
       finalMessages.push({ role: "system", content: sys });
 
+      if (mode === "chat") {
+        // live data works for custom providers too
+        try {
+          const live = await gatherLiveData(lastUser);
+          if (live) finalMessages.push({ role: "system", content: live });
+        } catch { /* best-effort */ }
+        try {
+          const searchData = await searchWeb(lastUser);
+          const ctx = searchContext(searchData);
+          if (ctx) finalMessages.push({ role: "system", content: ctx });
+        } catch { /* best-effort */ }
+      }
+
       if (mode === "agent") {
         const filesCtx = filesContextMessage(body.files);
         if (filesCtx) finalMessages.push({ role: "system", content: filesCtx });
@@ -143,7 +171,7 @@ export default async function handler(req, res) {
             apiKey: custom.apiKey,
             modelId: custom.modelId,
             messages: finalMessages,
-            temperature: mode === "agent" ? 0.3 : 0.7,
+            temperature: mode === "agent" ? 0.3 : 0.5,
             maxTokens: mode === "agent" ? 30000 : 4096,
             signal: abort.signal,
           },
@@ -152,13 +180,14 @@ export default async function handler(req, res) {
         // agent contract repair passes on custom providers too
         if (mode === "agent") {
           let text = collected;
-          for (let pass = 0; pass < 2; pass++) {
+          for (let pass = 0; pass < 3; pass++) {
             const blocks = parseFileBlocks(text);
             const bad = blocks.filter((b) => isEmptyFile(b) || b.truncated);
             const wantsContinue = /(^|\n)\s*CONTINUE:\s*$/i.test(text.trim());
             if (!bad.length && !wantsContinue) break;
             status(wantsContinue ? "Continuing the build…" : "Completing files…");
             delta("\n\n---\n\n");
+            let repair = "";
             await streamRemote(
               {
                 baseUrl: custom.baseUrl,
@@ -180,9 +209,10 @@ export default async function handler(req, res) {
                 maxTokens: 30000,
                 signal: abort.signal,
               },
-              (d) => { collected += d; delta(d); }
+              (d) => { repair += d; collected += d; delta(d); }
             );
             text = collected;
+            if (!repair.trim()) break; // provider gave nothing — stop looping
           }
           collected = text;
         }
@@ -212,14 +242,30 @@ export default async function handler(req, res) {
       if (live) finalMessages.push({ role: "system", content: live });
     } catch { /* best-effort */ }
 
-    // optional live web search (user toggle)
+    // ALWAYS-ON web search for chat mode: quiet freshness check. A full
+    // search runs for news/current/price questions; for everything else a
+    // cheap gate keeps latency down.
     let searchData = null;
-    if (body.search) {
-      status("Searching the web…");
+    if (mode === "chat") {
       try {
-        searchData = await searchWeb(lastUser);
-        const ctx = searchContext(searchData);
-        if (ctx) finalMessages.push({ role: "system", content: ctx });
+        if (NEEDS_NEWS.test(lastUser)) {
+          status("Checking the latest news…");
+          const items = await newsHeadlines("", 14).catch(() => []);
+          const ctxN = newsContext(items, "top stories, last 24h");
+          if (ctxN) finalMessages.push({ role: "system", content: ctxN });
+        } else if (NEEDS_WEB.test(lastUser)) {
+          status("Searching the web…");
+          searchData = await searchWeb(lastUser);
+          const ctx = searchContext(searchData);
+          if (ctx) finalMessages.push({ role: "system", content: ctx });
+        } else {
+          // light search for any non-trivial question (best-effort, silent)
+          searchData = await searchWeb(lastUser).catch(() => null);
+          if (searchData) {
+            const ctx = searchContext(searchData);
+            if (ctx) finalMessages.push({ role: "system", content: ctx });
+          }
+        }
       } catch { /* best-effort */ }
     }
 
@@ -250,10 +296,10 @@ export default async function handler(req, res) {
       onStatus: status,
     });
 
-    // ---- Agent staged pipeline ----
+    // ---- Agent staged pipeline (autopilot: keeps going until complete) ----
     if (mode === "agent") {
       let pass = 0;
-      const maxPasses = 3;
+      const maxPasses = 6;
 
       while (pass < maxPasses) {
         pass++;

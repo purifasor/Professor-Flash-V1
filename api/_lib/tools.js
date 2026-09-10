@@ -1,15 +1,46 @@
 // Live data tools for Professor AI — injected into model context on demand:
-//  - currency & crypto prices (real-time, no key needed)
-//  - gold prices (global XAU + Iran local when available)
+//  - currency & crypto prices (real-time, no key needed, multi-source)
+//  - gold prices (global XAU + Iran local, free-market Toman)
 //  - world clocks & dates (any IANA timezone)
-//  - tiny web search (DDG) for news/current events
 // These make every connected model capable of answering time/price questions
 // exactly instead of hallucinating.
 
 import { fetchTimeout } from "./util.js";
 
 // ------------------------------------------------------------- FX & crypto
-// Free keyless endpoints; each with graceful degradation.
+// Free keyless endpoints; each with graceful degradation and backups.
+
+// Iran free-market USD/Toman — multiple sources, first hit wins.
+// (Tgju publishes the open-market rate; rates are in Toman per USD.)
+async function iranUsdToman() {
+  // 1) tgju.org free endpoint (Toman per USD)
+  try {
+    const res = await fetchTimeout("https://call1.tgju.org/ajax.json", {}, 8000);
+    if (res.ok) {
+      const d = await res.json();
+      const find = (names) => {
+        for (const n of names) {
+          const v = d?.current?.[n]?.p;
+          if (v) return Number(String(v).replace(/,/g, ""));
+        }
+        return null;
+      };
+      const usd = find(["price_dollar_rl", "dollar", "usd"]);
+      if (usd && usd > 10000) return { rate: usd, source: "tgju.org free market" };
+    }
+  } catch { /* next source */ }
+  // 2) fallback: derive from open.er-api IRR (rial) → toman
+  try {
+    const res = await fetchTimeout("https://open.er-api.com/v6/latest/USD", {}, 8000);
+    if (res.ok) {
+      const d = await res.json();
+      const irr = d?.rates?.IRR;
+      if (irr) return { rate: Math.round(irr / 10), source: "open.er-api (derived)" };
+    }
+  } catch { /* best-effort */ }
+  return null;
+}
+
 async function fxRates(base = "USD") {
   const res = await fetchTimeout(
     `https://open.er-api.com/v6/latest/${encodeURIComponent(base)}`,
@@ -26,7 +57,7 @@ async function cryptoPrices(ids = ["bitcoin", "ethereum", "tether"]) {
   const res = await fetchTimeout(
     "https://api.coingecko.com/api/v3/simple/price?ids=" +
       ids.join(",") +
-      "&vs_currencies=usd,eur,irt&include_24hr_change=true",
+      "&vs_currencies=usd,eur&include_24hr_change=true",
     {},
     10000
   );
@@ -36,24 +67,41 @@ async function cryptoPrices(ids = ["bitcoin", "ethereum", "tether"]) {
 }
 
 async function goldPrice() {
-  // XAU in USD via exchange-rate style endpoint (per-ounce)
-  const res = await fetchTimeout("https://api.gold-api.com/price/XAU", {}, 10000);
-  if (!res.ok) throw new Error("gold-http-" + res.status);
-  const d = await res.json();
-  return { priceUsdPerOunce: d.price, updatedAt: d.updatedAt || d.timestamp || "" };
+  // XAU in USD per troy ounce — source 1
+  try {
+    const res = await fetchTimeout("https://api.gold-api.com/price/XAU", {}, 8000);
+    if (res.ok) {
+      const d = await res.json();
+      if (d?.price) return { priceUsdPerOunce: d.price, updatedAt: d.updatedAt || d.timestamp || "" };
+    }
+  } catch { /* next source */ }
+  // source 2: coingecko PAXG (gold-backed token ≈ XAU spot)
+  try {
+    const res = await fetchTimeout(
+      "https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd",
+      {},
+      8000
+    );
+    if (res.ok) {
+      const d = await res.json();
+      const p = d?.["pax-gold"]?.usd;
+      if (p) return { priceUsdPerOunce: p, updatedAt: "PAXG spot proxy" };
+    }
+  } catch { /* best-effort */ }
+  throw new Error("gold-unavailable");
 }
 
-/** Iran gold (18k gram & mesghal) derived from global XAU + USD/IRR — flagged as derived. */
-async function iranGold(goldUsdPerOunce, usdIrr) {
-  if (!goldUsdPerOunce || !usdIrr) return null;
+/** Iran gold (18k gram & mesghal) derived from global XAU + free-market Toman. */
+async function iranGold(goldUsdPerOunce, usdToman) {
+  if (!goldUsdPerOunce || !usdToman) return null;
   const gram24 = goldUsdPerOunce / 31.1035;
   const gram18 = gram24 * 0.75;
   const mesghal = gram24 * 4.6083;
   return {
-    note: "derived from global XAU × free-market USD/IRR (estimate)",
-    gram18k: Math.round(gram18 * usdIrr),
-    mesghal24k: Math.round(mesghal * usdIrr),
-    gram24k: Math.round(gram24 * usdIrr),
+    note: "derived from global XAU × free-market USD/Toman",
+    gram18k: Math.round(gram18 * usdToman),
+    mesghal24k: Math.round(mesghal * usdToman),
+    gram24k: Math.round(gram24 * usdToman),
   };
 }
 
@@ -99,34 +147,51 @@ export async function gatherLiveData(lastUserText) {
   const wantsPrice =
     wants(["قیمت", "price", "چند", "how much", "نرخ", "rate", "دلار", "dollar",
       "euro", "یورو", "bitcoin", "بیت کوین", "بیت‌کوین", "crypto", "ارز", "currency",
-      "gold", "طلا", "طلای", "toman", "تومان"]);
+      "gold", "طلا", "طلای", "toman", "تومان", "مصوبه", "سکه", "coin", "usd"]);
   const wantsTime = wants(["ساعت", "time", "date", "تاریخ", "today", "امروز",
-    "clock", "what day", "چندمه", "چندمه", "now", "الان"]);
+    "clock", "what day", "چندمه", "now", "الان"]);
 
   if (wantsPrice) {
-    const [fx, gold, crypto] = await Promise.allSettled([fxRates("USD"), goldPrice(), cryptoPrices()]);
+    const [fx, gold, crypto, iran] = await Promise.allSettled([
+      fxRates("USD"),
+      goldPrice(),
+      cryptoPrices(),
+      iranUsdToman(),
+    ]);
+
+    // free-market Iran rate first (most-asked), then global FX
+    const iranRate = iran.status === "fulfilled" ? iran.value : null;
+    if (iranRate) {
+      parts.push(
+        `IRAN FREE MARKET: 1 USD = ${iranRate.rate.toLocaleString("en-US")} Toman ` +
+          `(${iranRate.source}, live)`
+      );
+    }
+
     if (fx.status === "fulfilled") {
       const r = fx.value;
-      const usdIrr = r.rates["IRR"] || null;
       const lines = [
         `LIVE FX (base USD, updated ${r.updatedAt}):`,
         `EUR: ${(1 / (r.rates["EUR"] || 1)).toFixed(4)} per USD | GBP: ${(1 / (r.rates["GBP"] || 1)).toFixed(4)} per USD`,
-        usdIrr ? `IRR (free-market proxy): 1 USD = ${usdIrr} IRR` : "",
-      ].filter(Boolean);
-      parts.push(lines.join("\n"));
-      if (gold.status === "fulfilled") {
-        const g = `GOLD (global): $${gold.value.priceUsdPerOunce} per troy ounce (XAU/USD, ${gold.value.updatedAt || "live"})`;
-        parts.push(g);
-        const ir = await iranGold(gold.value.priceUsdPerOunce, usdIrr);
-        if (ir) {
-          parts.push(
-            `GOLD IRAN (estimate from XAU × USD/IRR): 18k gram ≈ ${ir.gram18k.toLocaleString()} IRR | mesghal ≈ ${ir.mesghal24k.toLocaleString()} IRR`
-          );
-        }
+      ];
+      if (!iranRate && r.rates["IRR"]) {
+        lines.push(`IRR (proxy): 1 USD = ${r.rates["IRR"]} IRR`);
       }
-    } else if (gold.status === "fulfilled") {
-      parts.push(`GOLD (global): $${gold.value.priceUsdPerOunce} per troy ounce`);
+      parts.push(lines.join("\n"));
     }
+
+    if (gold.status === "fulfilled") {
+      const g = gold.value;
+      parts.push(`GOLD (global spot): $${g.priceUsdPerOunce} per troy ounce (XAU/USD, ${g.updatedAt || "live"})`);
+      const toman = iranRate ? iranRate.rate : null;
+      const ir = await iranGold(g.priceUsdPerOunce, toman).catch(() => null);
+      if (ir) {
+        parts.push(
+          `GOLD IRAN (derived: XAU × free-market USD/Toman): 18k gram ≈ ${ir.gram18k.toLocaleString("en-US")} T | mesghal ≈ ${ir.mesghal24k.toLocaleString("en-US")} T | 24k gram ≈ ${ir.gram24k.toLocaleString("en-US")} T`
+        );
+      }
+    }
+
     if (crypto.status === "fulfilled") {
       const c = crypto.value;
       const cLines = Object.keys(c).map((id) => {

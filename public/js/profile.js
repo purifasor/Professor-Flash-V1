@@ -35,7 +35,6 @@ window.PFProfile = (() => {
       : "—";
     $("pfChats").textContent = String(stats.chats);
     $("pfModels").textContent = String(stats.models);
-    $("setSearch").checked = !!(user.settings && user.settings.searchDefault);
     renderProviders();
   }
 
@@ -74,20 +73,6 @@ window.PFProfile = (() => {
       if (window.PFApp && PFApp.setProviders) PFApp.setProviders(providers);
     } catch {
       // profile load failure is non-fatal
-    }
-  }
-
-  async function saveSettings() {
-    const settings = { searchDefault: $("setSearch").checked };
-    try {
-      await api("/api/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "settings", settings }),
-      });
-      if (window.PFApp) PFApp.toast("Settings saved ✓");
-    } catch (e) {
-      if (window.PFApp) PFApp.toast("Could not save settings");
     }
   }
 
@@ -180,8 +165,6 @@ window.PFProfile = (() => {
     $("ptabProfile").addEventListener("click", () => switchTab("profile"));
     $("ptabProviders").addEventListener("click", () => switchTab("providers"));
     $("ptabDanger").addEventListener("click", () => switchTab("danger"));
-
-    $("setSearch").addEventListener("change", saveSettings);
 
     $("btnClearHistory").addEventListener("click", () => {
       $("clearConfirm").hidden = false;

@@ -68,7 +68,7 @@ window.PFMD = (() => {
       wrap.className = "code-wrap";
       wrap.innerHTML =
         `<div class="code-head"><span>${esc(lang)}</span>` +
-        `<button class="code-copy" type="button">کپی</button></div>`;
+        `<button class="code-copy" type="button">Copy</button></div>`;
       const np = document.createElement("pre");
       const nc = document.createElement("code");
       nc.className = code.className;

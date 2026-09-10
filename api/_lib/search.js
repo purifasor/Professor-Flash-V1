@@ -1,4 +1,5 @@
-// Free keyless web search: DuckDuckGo HTML + Wikipedia summaries (fa/en).
+// Free keyless web search: DuckDuckGo HTML + Wikipedia summaries (fa/en)
+// + Google News RSS headlines (last-24h news awareness).
 
 import { fetchTimeout } from "./util.js";
 
@@ -62,6 +63,48 @@ async function wikiSummary(query, lang) {
   } catch {
     return null;
   }
+}
+
+// ------------------------------------------------------------ news headlines
+/**
+ * Google News RSS (keyless): latest headlines for a topic (or top news when
+ * no topic). Returns [{ title, source, when, url }, …].
+ */
+export async function newsHeadlines(topic = "", max = 12) {
+  const feed =
+    "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en" +
+    (topic ? "&q=" + encodeURIComponent(topic) : "");
+  const res = await fetchTimeout(feed, { headers: { "User-Agent": UA } }, 12000);
+  if (!res.ok) throw new Error("news-" + res.status);
+  const xml = await res.text();
+
+  const items = [];
+  const re = /<item>([\s\S]*?)<\/item>/g;
+  let m;
+  while ((m = re.exec(xml)) && items.length < max) {
+    const block = m[1];
+    const title = decodeEntities((block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || "");
+    const link = decodeEntities((block.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || "");
+    const pub = decodeEntities((block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || "");
+    const src = decodeEntities((block.match(/<source[^>]*>([\s\S]*?)<\/source>/) || [])[1] || "");
+    if (title) items.push({ title, url: link, when: pub, source: src });
+  }
+  return items;
+}
+
+/** Format headlines as model context. */
+export function newsContext(items, topicLabel = "") {
+  if (!items || !items.length) return null;
+  const lines = items.map((n) => {
+    const when = n.when ? new Date(n.when).toISOString().slice(0, 16).replace("T", " ") + "Z" : "";
+    return `- [${n.source || "news"} | ${when}] ${n.title}`;
+  });
+  return (
+    "LATEST NEWS HEADLINES" + (topicLabel ? ` — ${topicLabel}` : "") +
+    " (Google News RSS, newest first — synthesize, name sources, group by " +
+    "importance: war/security, economy/markets, then the rest):\n" +
+    lines.join("\n")
+  );
 }
 
 /**

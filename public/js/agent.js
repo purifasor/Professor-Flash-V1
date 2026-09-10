@@ -78,6 +78,14 @@ window.PFAgent = (() => {
     return added;
   }
 
+  // Non-browser source files (python/cpp/java/…) — the preview can't run them.
+  const NONWEB_EXT = ["py", "cpp", "c", "h", "hpp", "java", "rs", "go", "rb", "php", "sh", "bat", "cs", "m", "lua", "sql"];
+  const hasWebEntry = () => !!findEntry();
+  const isNonWebProject = () => {
+    if (!files.size || hasWebEntry()) return false;
+    return [...files.keys()].some((p) => NONWEB_EXT.includes((p.split(".").pop() || "").toLowerCase()));
+  };
+
   function reset() {
     files.clear();
     activeFile = null;
@@ -364,6 +372,21 @@ window.PFAgent = (() => {
     clearTimeout(previewTimer);
     const html = buildHtml();
     const status = $("previewStatus");
+
+    // Non-browser project (python/cpp/…): close the preview, show sources.
+    if (!html && isNonWebProject()) {
+      showEmpty(true);
+      $("previewStage").hidden = true;
+      status.hidden = false;
+      status.classList.remove("ok", "err");
+      status.textContent = "non-browser project — see the FILES tab for sources";
+      switchTab("files");
+      const pick =
+        [...files.keys()].find((p) => p === "main.py") ||
+        [...files.keys()].find((p) => NONWEB_EXT.includes((p.split(".").pop() || "").toLowerCase()));
+      if (pick) openFile(pick, { silent: true });
+      return;
+    }
 
     if (!html) {
       // files may exist but none is an html entry → nothing runnable yet

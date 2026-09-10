@@ -1,34 +1,50 @@
 // Professor AI — main app: chat streaming, sessions, model picker, agent integration.
-// English UI. Model choice locks per-conversation once set. Custom providers
-// (user-added models) stream through the same pipeline with red errors.
+// English UI. Model choice locks per-conversation once set; the last choice
+// becomes the default for new chats. Custom providers (user-added models)
+// stream through the same pipeline. Sessions are stored PER ACCOUNT —
+// switching accounts never leaks history.
 window.PFApp = (() => {
   const $ = (id) => document.getElementById(id);
 
   /* ============================ state ============================ */
-  const LS_KEY = "professor-ai.sessions";
   const LS_SIDE = "professor-ai.side";
-  const LS_SEARCH = "professor-ai.search";
-  let sessions = loadSessions();
+  const LS_MODEL = "professor-ai.lastModel";
+  let lsPrefix = "public"; // per-account prefix, set on login
+  let sessions = [];
   let currentId = null;
   let mode = "chat";
-  let searchOn = loadBool(LS_SEARCH, false);
   let streaming = false;
   let abortCtrl = null;
-  let providers = []; // user's custom providers [{name, modelId,...}]
+  let providers = []; // user's custom providers [{name, modelId,…}]
+
+  const sessionsKey = () => `professor-ai.sessions.${lsPrefix}`;
+
+  function setAccountKey(identifier) {
+    const raw = String(identifier || "public").trim().toLowerCase();
+    const safe = raw.replace(/[^a-z0-9@._-]/g, "").slice(0, 60) || "public";
+    lsPrefix = safe;
+    sessions = loadSessions();
+    currentId = sessions.length ? sessions[0].id : null;
+  }
 
   function loadSessions() {
-    try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; }
-  }
-  function loadBool(k, d) {
-    try { const v = localStorage.getItem(k); return v === null ? d : v === "1"; } catch { return d; }
+    try { return JSON.parse(localStorage.getItem(sessionsKey())) || []; } catch { return []; }
   }
   let saveTimer = null;
   function saveSessions() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      try { localStorage.setItem(LS_KEY, JSON.stringify(sessions.slice(0, 60))); } catch { /* full */ }
+      try { localStorage.setItem(sessionsKey(), JSON.stringify(sessions.slice(0, 60))); } catch { /* full */ }
     }, 250);
   }
+
+  function loadLastModel() {
+    try { return localStorage.getItem(LS_MODEL) || ""; } catch { return ""; }
+  }
+  function saveLastModel(v) {
+    try { localStorage.setItem(LS_MODEL, v || ""); } catch { /* noop */ }
+  }
+
   const current = () => sessions.find((s) => s.id === currentId) || null;
   const isMobile = () => window.matchMedia("(max-width: 1023px)").matches;
 
@@ -67,7 +83,7 @@ window.PFApp = (() => {
       id: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: "New chat",
       mode,
-      provider: "", // "" = default; locked on first send
+      provider: loadLastModel(), // remember the last selected model
       created: Date.now(),
       messages: [],
       files: [],
@@ -101,8 +117,9 @@ window.PFApp = (() => {
     renderSessionList();
   }
 
-  function deleteSession(id, ev) {
-    ev.stopPropagation();
+  function deleteSession(id, title) {
+    // English confirmation before deleting a conversation
+    if (!confirm(`Delete this conversation?\n\n"${title}"\n\nThis cannot be undone.`)) return;
     sessions = sessions.filter((s) => s.id !== id);
     if (currentId === id) {
       currentId = null;
@@ -120,6 +137,7 @@ window.PFApp = (() => {
     }
     saveSessions();
     renderSessionList();
+    toast("Conversation deleted");
   }
 
   function renderSessionList() {
@@ -137,7 +155,10 @@ window.PFApp = (() => {
         `<span class="si-title">${PFMD.esc(s.title)}</span>` +
         `<span class="si-del" title="Delete">✕</span>`;
       b.addEventListener("click", () => switchSession(s.id));
-      b.querySelector(".si-del").addEventListener("click", (e) => deleteSession(s.id, e));
+      b.querySelector(".si-del").addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteSession(s.id, s.title);
+      });
       box.appendChild(b);
     }
   }
@@ -202,7 +223,15 @@ window.PFApp = (() => {
   function buildHero() {
     const hero = document.createElement("div");
     hero.innerHTML = HERO_HTML;
-    return hero.firstElementChild;
+    const el = hero.firstElementChild;
+    // restart the tips rotation inside the fresh hero
+    if (window.PFTips) {
+      const chatTip = el.querySelector("#heroTip");
+      if (chatTip && window.PFTips.startRotation) {
+        PFTips.startRotation(chatTip, PFTips.chatTips, 15000);
+      }
+    }
+    return el;
   }
 
   const HERO_HTML = $("hero") ? $("hero").outerHTML : "";
@@ -210,22 +239,28 @@ window.PFApp = (() => {
   function buildMsg(m) {
     const wrap = document.createElement("div");
     wrap.className = "msg " + (m.role === "user" ? "user" : "ai");
-    const avatar = m.role === "user" ? "👤" : "⚡";
-    const role = m.role === "user" ? "You" : "Professor";
+    const isUser = m.role === "user";
+    const avatar = isUser ? "👤" : "";
+    const role = isUser ? "You" : "Professor";
     const modelChip = m.model ? `<span class="model-chip">${PFMD.esc(shortModel(m.model))}</span>` : "";
     const msgMode = m.mode || mode;
-    const contentHtml = m.role === "user" ? PFMD.esc(m.content) : renderContent(m.content, msgMode);
+    const contentHtml = isUser ? PFMD.esc(m.content) : renderContent(m.content, msgMode);
     const srcBox = m.search?.results?.length
       ? `<div class="src-box">${m.search.results
           .slice(0, 4)
           .map((r) => `<a class="src-link" href="${PFMD.esc(r.url)}" target="_blank" rel="noopener">🔗 ${PFMD.esc(r.title)}</a>`)
           .join("")}</div>`
       : "";
+    // per-message copy button (user AND ai messages)
+    const copyBtn = `<button class="msg-copy" type="button" title="Copy message" aria-label="Copy message">
+      <svg viewBox="0 0 24 24" width="12" height="12"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Copy</span></button>`;
     wrap.innerHTML =
       `<div class="msg-avatar">${avatar}</div>` +
       `<div class="msg-body">` +
       `<div class="msg-meta"><span class="msg-role">${role}</span>${modelChip}</div>` +
-      `<div class="msg-content md">${contentHtml}</div>${srcBox}</div>`;
+      `<div class="msg-content md">${contentHtml}</div>${srcBox}` +
+      `<div class="msg-actions">${copyBtn}</div></div>`;
     wireMsg(wrap);
     return wrap;
   }
@@ -245,6 +280,22 @@ window.PFApp = (() => {
         PFAgent.openFile(b.dataset.file) || PFAgent.switchTab("files");
       })
     );
+    const copyBtn = wrap.querySelector(".msg-copy");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", async () => {
+        const content =
+          wrap.querySelector(".msg-content")?.innerText ||
+          wrap.querySelector(".msg-content")?.textContent ||
+          "";
+        try {
+          await navigator.clipboard.writeText(content);
+          copyBtn.querySelector("span").textContent = "Copied ✓";
+        } catch {
+          copyBtn.querySelector("span").textContent = "Error";
+        }
+        setTimeout(() => (copyBtn.querySelector("span").textContent = "Copy"), 1600);
+      });
+    }
   }
 
   function shortModel(id) {
@@ -256,48 +307,71 @@ window.PFApp = (() => {
     if (h) h.remove();
   }
 
-  /* ============================ model picker ============================ */
+  /* ============================ model picker (below composer, upward dropdown) ============================ */
   // Per-conversation lock: once a session has messages, its provider is fixed.
+  // The last choice is remembered and becomes the default for new chats.
+  let mpOpen = false;
+
+  function chosenProvider() {
+    const s = current();
+    if (s && s.provider) return s.provider;
+    return loadLastModel();
+  }
+
+  function providerLabel(v) {
+    if (!v) return "Default";
+    const p = providers.find((x) => (x.name || x.modelId) === v);
+    return p ? p.name || p.modelId : v;
+  }
+
   function renderModelPicker() {
     const box = $("modelOptions");
     if (!box) return;
     box.innerHTML = "";
     const s = current();
     const locked = s && s.messages && s.messages.length > 0;
-    const chosen = (s && s.provider) || "";
+    const chosen = chosenProvider();
 
     const mk = (label, value, isCustom) => {
       const b = document.createElement("button");
       b.className = "mp-option" + ((value || "") === chosen ? " active" : "") + (isCustom ? " custom" : "");
       b.dataset.provider = value || "";
-      b.textContent = label;
+      b.setAttribute("role", "option");
+      b.innerHTML =
+        `<span class="mp-name">${PFMD.esc(label)}</span>` +
+        (value ? '<span class="mp-tag">custom</span>' : '<span class="mp-tag">built-in</span>');
       b.disabled = locked && (value || "") !== chosen;
-      b.title = locked ? "This conversation is locked to its model" : label;
       b.addEventListener("click", () => {
         if (locked) return;
-        const sess = current();
-        if (sess) {
-          sess.provider = value || "";
-          saveSessions();
-        }
+        const sess = ensureSession();
+        sess.provider = value || "";
+        saveLastModel(value || ""); // remember for the next new chat
+        saveSessions();
+        setMpOpen(false);
         renderModelPicker();
       });
       return b;
     };
 
-    box.appendChild(mk("Default", "", false));
+    box.appendChild(mk("Default — Professor engine", "", false));
     for (const p of providers) {
       box.appendChild(mk(p.name || p.modelId, p.name || p.modelId, true));
     }
+
+    $("mpCurrent").textContent = providerLabel(chosen);
+    $("mpLock").hidden = !locked;
     $("modelPickerBar").classList.toggle("locked", locked);
   }
 
-  function setProviders(list) {
-    providers = Array.isArray(list) ? list : [];
-    renderModelPicker();
+  function setMpOpen(open) {
+    mpOpen = open;
+    const drop = $("modelOptions");
+    drop.hidden = !open;
+    $("mpTrigger").setAttribute("aria-expanded", String(open));
+    $("modelPickerBar").classList.toggle("open", open);
   }
 
-  /* ============================ mode & search ============================ */
+  /* ============================ mode ============================ */
   function setMode(next, { soft = false } = {}) {
     mode = next === "agent" ? "agent" : "chat";
     $("app").dataset.mode = mode;
@@ -311,9 +385,6 @@ window.PFApp = (() => {
     $("input").placeholder = mode === "agent"
       ? "Describe the app you want… (e.g. build a 3D first-person shooter with a neon-red dark theme)"
       : "Write your message… (Enter = send, Shift+Enter = new line)";
-    $("composerHint").innerHTML = mode === "agent"
-      ? "Coding agent: <b>multi-file</b> projects + live preview + console + auto-fix + ZIP"
-      : 'Live prices &amp; time data · fresh answers, never canned · <b>your history stays private</b>';
     if (!soft) {
       const s = current();
       if (s && s.messages.length && s.mode !== mode) {
@@ -324,13 +395,6 @@ window.PFApp = (() => {
         renderSessionList();
       }
     }
-  }
-
-  function setSearch(on, { silent = false } = {}) {
-    searchOn = !!on;
-    try { localStorage.setItem(LS_SEARCH, on ? "1" : "0"); } catch { /* noop */ }
-    $("btnSearch").setAttribute("aria-pressed", String(searchOn));
-    if (!silent) toast(searchOn ? "Web search enabled 🌐" : "Web search disabled");
   }
 
   /* ============================ sidebar ============================ */
@@ -420,17 +484,19 @@ window.PFApp = (() => {
       }
     };
 
+    // History for the model: assistant turns keep a COMPACT summary of files
+    // (paths only) — full contents of current files travel via payload.files,
+    // so the model always has live access to its own work without bloating.
     const history = s.messages.slice(0, -1).map((m) => ({
       role: m.role,
       content:
-        m.role === "assistant"
-          ? m.content.replace(/```file:[^\n`]+\n[\s\S]*?```/g, "\n[files emitted]\n")
+        m.role === "assistant" && mode === "agent"
+          ? m.content.replace(/```file:([^\n`]+)\n[\s\S]*?```/g, (_mm, p) => `\n[emitted file: ${p.trim()} — current content is in the project files block]\n`)
           : m.content,
     }));
 
     const payload = { mode, messages: history };
     if (s.provider) payload.provider = s.provider; // custom provider name
-    if (mode === "chat" && searchOn) payload.search = true;
     if (mode === "agent") {
       payload.files = PFAgent.getFiles();
       if (errors && errors.length) payload.errors = errors;
@@ -575,7 +641,7 @@ window.PFApp = (() => {
     const wrap = document.createElement("div");
     wrap.className = "msg ai";
     wrap.innerHTML =
-      `<div class="msg-avatar">⚡</div>` +
+      `<div class="msg-avatar"></div>` +
       `<div class="msg-body">` +
       `<div class="msg-meta"><span class="msg-role">Professor</span></div>` +
       `<div class="status-line" hidden><span class="status-dot"></span><span>…</span></div>` +
@@ -596,7 +662,7 @@ window.PFApp = (() => {
       PFAgent.openMobile();
       PFAgent.pushConsole("log", "auto-fix: asking the agent to repair " + errors.length + " error(s)…");
       send(
-        "The preview reported these runtime errors. Find the root cause and re-emit the fixed file(s) in full:\n" +
+        "The preview reported these runtime errors. Find the root cause in the current project files and re-emit the fixed file(s) in full:\n" +
           errors.map((e) => "- " + e).join("\n"),
         { errors }
       );
@@ -609,12 +675,20 @@ window.PFApp = (() => {
 
     $("btnModeChat").addEventListener("click", () => setMode("chat"));
     $("btnModeAgent").addEventListener("click", () => setMode("agent"));
-    $("btnSearch").addEventListener("click", () => setSearch(!searchOn));
     $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeSideMobile(); } });
     $("btnOpenSide").addEventListener("click", openSide);
     $("btnCloseSide").addEventListener("click", closeSide);
     $("btnToggleSide").addEventListener("click", toggleSide);
     $("sideBackdrop").addEventListener("click", closeSide);
+
+    // model picker dropdown (below composer, opens upward)
+    $("mpTrigger").addEventListener("click", () => setMpOpen(!mpOpen));
+    document.addEventListener("click", (e) => {
+      if (mpOpen && !$("modelPickerBar").contains(e.target)) setMpOpen(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && mpOpen) setMpOpen(false);
+    });
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && isMobile() && $("app").dataset.side === "open") closeSide();
@@ -657,17 +731,9 @@ window.PFApp = (() => {
       $("app").dataset.side = pref;
     }
 
-    if (sessions.length) {
-      currentId = sessions[0].id;
-      const s = current();
-      setMode(s.mode || "chat", { soft: true });
-      renderMessages();
-      PFAgent.setFiles(s.files || []);
-    } else {
-      newSession();
-    }
+    // start with a fresh session (tips hero shows immediately)
+    newSession();
     renderSessionList();
-    setSearch(searchOn, { silent: true });
   }
 
   document.addEventListener("DOMContentLoaded", init);
@@ -676,10 +742,24 @@ window.PFApp = (() => {
     toast, send, setProviders,
     onUser(u) {
       // called by auth.js when the session exists — load the user's providers
+      // and isolate all local session data under their account key
+      setAccountKey(u?.email || u?.username || "public");
+      renderMessages();
+      renderSessionList();
+      renderModelPicker();
+      PFAgent.reset();
+      newSession();
       fetch("/api/profile")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (d) setProviders(d.providers || []); })
         .catch(() => {});
+    },
+    onLogout() {
+      // wipe in-memory data and clear per-account storage on sign-out
+      sessions = [];
+      currentId = null;
+      try { localStorage.removeItem(sessionsKey()); } catch { /* noop */ }
+      renderSessionList();
     },
   };
 })();

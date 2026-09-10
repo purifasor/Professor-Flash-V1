@@ -3,10 +3,15 @@
 // the private database. Google users get a generated password written to
 // their info file so they can also log in with email+password later.
 //
-// No email verification codes — just email and password, as specified.
+// Account lookup uses BOTH:
+//   1) accounts index  (root-level _index.json: email/username → folder)
+//   2) folder-name guesses (username / email / email-prefix)
+// so a login never fails because the folder was named differently at
+// signup. No email verification codes — just email and password.
 
 import {
   userFolder, getAccount, saveAccount, writeUserInfo, hashPassword, verifyPassword,
+  getIndex, setIndexEntry,
 } from "./_lib/db.js";
 import { issueSession, setSessionCookie, clearSessionCookie, currentUser } from "./_lib/auth.js";
 
@@ -64,11 +69,61 @@ function publicUser(account) {
   };
 }
 
+/**
+ * Find an account by whatever the user typed (email OR username OR the
+ * email's local part), via the accounts index and folder-name guesses.
+ */
+async function findAccount(identifier) {
+  const id = String(identifier || "").trim().toLowerCase();
+  if (!id) return null;
+
+  // 1) accounts index (authoritative)
+  try {
+    const index = await getIndex();
+    const hit = index[id] || index[id.replace(/@.*/, "")];
+    if (hit) {
+      const acc = await getAccount(hit);
+      if (acc) return acc;
+    }
+  } catch { /* index read failed — fall through to guesses */ }
+
+  // 2) folder-name guesses (covers legacy accounts made before the index)
+  const guesses = [
+    userFolder(id),                    // full email or username as folder
+    userFolder(id.split("@")[0]),      // email local part
+  ];
+  // try the email's domain-less form and the raw identifier as-is
+  for (const g of new Set(guesses)) {
+    const acc = await getAccount(g);
+    if (acc) {
+      // verify it really is the right account (email or username matches)
+      if (
+        (acc.email || "").toLowerCase() === id ||
+        (acc.username || "").toLowerCase() === id ||
+        (acc.username || "").toLowerCase() === id.replace(/@.*/, "")
+      ) {
+        return acc;
+      }
+    }
+  }
+  // 3) last resort: any guess hit (covers username == email-prefix setups)
+  for (const g of guesses) {
+    const acc = await getAccount(g);
+    if (acc) return acc;
+  }
+  return null;
+}
+
 async function createAccount({ username, email, password, provider }, ctx) {
   const folder = userFolder(username || email);
   const existing = await getAccount(folder);
   if (existing) {
     return { error: "exists", message: "An account with this username/email already exists." };
+  }
+  // also block duplicate emails under different folder names
+  const byEmail = await findAccount(email);
+  if (byEmail) {
+    return { error: "exists", message: "An account with this email already exists." };
   }
   const { salt, hash } = hashPassword(password);
   const account = {
@@ -81,6 +136,9 @@ async function createAccount({ username, email, password, provider }, ctx) {
     settings: { theme: "dark", liveData: true },
   };
   await saveAccount(folder, account);
+  // index by email AND username → folder, so login lookup never misses
+  await setIndexEntry(email, folder);
+  if (account.username) await setIndexEntry(account.username.toLowerCase(), folder);
   await writeUserInfo(folder, {
     username: account.username,
     email,
@@ -136,19 +194,19 @@ export default async function handler(req, res) {
     return res.status(201).json({ user: publicUser(r.account) });
   }
 
-  // ---- login ----
+  // ---- login (email OR username + password) ----
   if (action === "login") {
     const identifier = String(body.email || body.username || "").trim().toLowerCase();
     const password = String(body.password || "");
     if (!identifier || !password) return res.status(400).json({ error: "missing-credentials" });
-    // Try both folder conventions: username and email
-    const folders = [userFolder(identifier), userFolder(identifier.split("@")[0])];
-    let account = null;
-    for (const f of folders) {
-      account = await getAccount(f);
-      if (account) break;
-    }
-    if (!account || !verifyPassword(password, account.password.salt, account.password.hash)) {
+    const account = await findAccount(identifier);
+    if (
+      !account ||
+      !account.password ||
+      !account.password.salt ||
+      !account.password.hash ||
+      !verifyPassword(password, account.password.salt, account.password.hash)
+    ) {
       return res.status(401).json({ error: "invalid-credentials", message: "Wrong email or password." });
     }
     setSessionCookie(res, issueSession(account));
@@ -167,8 +225,7 @@ export default async function handler(req, res) {
       const info = await gr.json();
       const email = (info.email || "").toLowerCase();
       if (!email) throw new Error("google-no-email");
-      const folder = userFolder(email);
-      let account = await getAccount(folder);
+      let account = await findAccount(email);
       if (!account) {
         // Google sign-in creates the account with a generated password
         const generated = genPassword();

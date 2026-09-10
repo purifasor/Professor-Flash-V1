@@ -144,6 +144,26 @@ export function userFolder(identifier) {
   return base.slice(0, 60);
 }
 
+// ------------------------------------------------- accounts index (_index.json)
+// email/username (lowercased) → folder. Makes login lookup exact — no
+// folder-name guessing. Best-effort: if the index is unreadable, the
+// folder-guess fallback in auth.js still works.
+const INDEX_PATH = "_index.json";
+
+export async function getIndex() {
+  const raw = await getFile(INDEX_PATH);
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
+export async function setIndexEntry(key, folder) {
+  const k = String(key || "").trim().toLowerCase();
+  if (!k || !folder) return;
+  const index = await getIndex();
+  index[k] = folder;
+  await putFile(INDEX_PATH, JSON.stringify(index, null, 2), `index: ${k} → ${folder}`);
+}
+
 const cache = new Map(); // folder -> { account, at }
 const CACHE_TTL = 3 * 60 * 1000;
 
@@ -208,10 +228,16 @@ export async function writeUserInfo(folder, { username, email, password, provide
  */
 export async function saveChat(folder, chat) {
   if (!chat || !Array.isArray(chat.messages) || !chat.messages.length) return;
-  const date = (chat.createdAt || new Date().toISOString()).slice(0, 10);
+  const created = chat.createdAt || new Date().toISOString();
+  const d = new Date(created);
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp =
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+    `_${pad(d.getUTCHours())}-${pad(d.getUTCMinutes())}`;
   const slug = slugify(chat.title || "conversation");
   const dir = `${folder}/Chats`;
-  const path = `${dir}/${date}-${slug}.txt`;
+  // filename carries date + time + conversation title (unique per chat)
+  const path = `${dir}/${stamp}-${slug}.txt`;
 
   const parts = [
     "========================================",
@@ -219,7 +245,7 @@ export async function saveChat(folder, chat) {
     ` Title : ${chat.title || "Conversation"}`,
     ` Mode  : ${chat.mode || "chat"}`,
     ` Model : ${chat.model || "default"}`,
-    ` Date  : ${date}`,
+    ` Date  : ${stamp.replace("_", " ")} UTC`,
     "========================================",
     "",
   ];
@@ -234,7 +260,7 @@ export async function saveChat(folder, chat) {
       parts.push("└─────────────────────────────┘", "");
     }
   }
-  await putFile(path, parts.join("\n"), `chat: ${folder} ${date}`);
+  await putFile(path, parts.join("\n"), `chat: ${folder} ${stamp}`);
 }
 
 /** Delete every chat file of a user (clear history). */

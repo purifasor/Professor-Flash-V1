@@ -162,11 +162,11 @@ export function filesContextMessage(files) {
     .slice(0, 32);
   if (!clean.length) return null;
 
-  let budget = 40000;
+  let budget = 60000;
   const parts = [];
   for (const f of clean) {
     let content = f.content;
-    if (content.length > 8000) content = content.slice(0, 8000) + "\n…(truncated)";
+    if (content.length > 10000) content = content.slice(0, 10000) + "\n…(truncated — but you built this file; you know it)";
     if (budget - content.length < 0) {
       parts.push(`### ${f.path}\n(omitted for size — ask the user if you need it)`);
       continue;
@@ -175,10 +175,12 @@ export function filesContextMessage(files) {
     parts.push(`### ${f.path}\n${content}`);
   }
   return (
-    "CURRENT PROJECT STATE — these files already exist from earlier in this " +
-    "conversation (your earlier work; evolve them, don't restart). Update ONLY " +
-    "the files that must change (re-emit them whole with ```file: blocks); " +
-    "untouched files persist automatically:\n\n" +
+    "CURRENT PROJECT STATE — YOUR OWN EARLIER WORK. These files already " +
+    "exist from earlier turns in this conversation. You have FULL access to " +
+    "them: read them above, diagnose issues from the real code, and when " +
+    "the user asks for a fix/change, re-emit ONLY the affected file(s) in " +
+    "full (client upserts by path). NEVER claim you can't see the files. " +
+    "Untouched files persist automatically:\n\n" +
     parts.join("\n\n")
   );
 }
