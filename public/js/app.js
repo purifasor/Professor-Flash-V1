@@ -18,13 +18,26 @@ window.PFApp = (() => {
   let providers = []; // user's custom providers [{name, modelId,…}]
 
   const sessionsKey = () => `professor-ai.sessions.${lsPrefix}`;
+  const currentKey = () => `professor-ai.current.${lsPrefix}`;
+
+  function loadCurrentId() {
+    try { return localStorage.getItem(currentKey()) || null; } catch { return null; }
+  }
+  function saveCurrentId(id) {
+    try {
+      if (id) localStorage.setItem(currentKey(), id);
+      else localStorage.removeItem(currentKey());
+    } catch { /* noop */ }
+  }
 
   function setAccountKey(identifier) {
     const raw = String(identifier || "public").trim().toLowerCase();
     const safe = raw.replace(/[^a-z0-9@._-]/g, "").slice(0, 60) || "public";
     lsPrefix = safe;
     sessions = loadSessions();
-    currentId = sessions.length ? sessions[0].id : null;
+    // restore the exact chat the user was in (no new chat on refresh)
+    const saved = loadCurrentId();
+    currentId = sessions.some((s) => s.id === saved) ? saved : (sessions.length ? sessions[0].id : null);
   }
 
   function loadSessions() {
@@ -55,6 +68,36 @@ window.PFApp = (() => {
     t.hidden = false;
     clearTimeout(t._timer);
     t._timer = setTimeout(() => (t.hidden = true), ms);
+  }
+
+  // In-site confirm dialog — a Promise<boolean>. Never uses the browser's
+  // native confirm() (blocked by "don't show again" style permissions and
+  // inconsistent across browsers).
+  function confirmDialog(title, text, okLabel = "Confirm") {
+    return new Promise((resolve) => {
+      const modal = $("siteConfirm");
+      $("siteConfirmTitle").textContent = title;
+      $("siteConfirmText").textContent = text;
+      const ok = $("siteConfirmOk");
+      ok.textContent = okLabel;
+      modal.hidden = false;
+      const done = (v) => {
+        modal.hidden = true;
+        ok.removeEventListener("click", okFn);
+        $("siteConfirmCancel").removeEventListener("click", cancelFn);
+        modal.removeEventListener("click", backdropFn);
+        document.removeEventListener("keydown", keyFn);
+        resolve(v);
+      };
+      const okFn = () => done(true);
+      const cancelFn = () => done(false);
+      const backdropFn = (e) => { if (e.target === modal) done(false); };
+      const keyFn = (e) => { if (e.key === "Escape") done(false); };
+      ok.addEventListener("click", okFn);
+      $("siteConfirmCancel").addEventListener("click", cancelFn);
+      modal.addEventListener("click", backdropFn);
+      document.addEventListener("keydown", keyFn);
+    });
   }
 
   function scrollBottom(force) {
@@ -90,6 +133,7 @@ window.PFApp = (() => {
     };
     sessions.unshift(s);
     currentId = s.id;
+    saveCurrentId(s.id);
     saveSessions();
     renderMessages();
     renderSessionList();
@@ -106,6 +150,7 @@ window.PFApp = (() => {
   function switchSession(id) {
     if (streaming || id === currentId) { closeSideMobile(); return; }
     currentId = id;
+    saveCurrentId(id);
     const s = current();
     if (s) {
       setMode(s.mode || "chat", { soft: true });
@@ -118,14 +163,21 @@ window.PFApp = (() => {
   }
 
   function deleteSession(id, title) {
-    // English confirmation before deleting a conversation
-    if (!confirm(`Delete this conversation?\n\n"${title}"\n\nThis cannot be undone.`)) return;
+    confirmDialog(`Delete this conversation?`, `"${title}" — this cannot be undone.`, "Delete").then((yes) => {
+      if (!yes) return;
+      doDeleteSession(id);
+    });
+  }
+
+  function doDeleteSession(id) {
     sessions = sessions.filter((s) => s.id !== id);
     if (currentId === id) {
       currentId = null;
+      saveCurrentId(null);
       if (sessions.length) {
         const nxt = sessions[0];
         currentId = nxt.id;
+        saveCurrentId(nxt.id);
         setMode(nxt.mode || "chat", { soft: true });
         renderMessages();
         PFAgent.setFiles(nxt.files || []);
@@ -168,22 +220,22 @@ window.PFApp = (() => {
     const hud = document.createElement("div");
     hud.className = "agent-hud";
     hud.innerHTML =
-      '<div class="hud-row"><span class="hud-spinner"></span><span class="hud-text">Thinking…</span></div>';
+      '<div class="hud-row"><span class="hud-spinner"></span><span class="hud-text">Thinking…</span></div>' +
+      '<div class="hud-files"></div>';
     el.appendChild(hud);
     return {
       set(text) { hud.querySelector(".hud-text").textContent = text; },
       addFile(path) {
-        let row = hud.querySelector(".hud-files");
-        if (!row) {
-          row = document.createElement("div");
-          row.className = "hud-files";
-          hud.appendChild(row);
-        }
+        const row = hud.querySelector(".hud-files");
         const chip = document.createElement("span");
         chip.className = "hud-file";
         chip.textContent = path;
         row.appendChild(chip);
+        // keep the HUD readable: show the last 6 files
+        while (row.children.length > 6) row.removeChild(row.firstChild);
       },
+      // coding state — clearer than a bare "Thinking…"
+      coding() { hud.querySelector(".hud-text").textContent = "Writing code…"; },
       remove() { hud.remove(); },
     };
   }
@@ -298,8 +350,31 @@ window.PFApp = (() => {
     }
   }
 
+  // Model chip labels. Custom providers keep the name the user chose.
+  // Built-in engine models are abbreviated so casual users don't mistake
+  // them for third-party services: Qwen → Q, NVIDIA → N, Ling → L.
   function shortModel(id) {
-    return String(id || "").split("/").pop().replace(/:free$/, "");
+    const s = String(id || "").toLowerCase();
+    if (!s) return "";
+    const isCustom = providers.some((p) => {
+      const nm = String(p.name || "").toLowerCase();
+      const mid = String(p.modelId || "").toLowerCase();
+      return s.includes(nm) || s.includes(mid) || nm.includes(s);
+    });
+    if (isCustom) {
+      const p = providers.find((x) => {
+        const nm = String(x.name || "").toLowerCase();
+        const mid = String(x.modelId || "").toLowerCase();
+        return s.includes(nm) || s.includes(mid) || nm.includes(s);
+      });
+      return (p && (p.name || p.modelId)) || String(id).split("/").pop();
+    }
+    if (s.includes("qwen")) return "Q";
+    if (s.includes("nemotron") || s.includes("nvidia")) return "N";
+    if (s.includes("ling") || s.includes("inclusion")) return "L";
+    // default engine with no model detail
+    if (s.includes("professor") || !s.includes("/")) return s.includes("professor") ? "Professor" : String(id).split("/").pop();
+    return String(id).split("/").pop().replace(/:free$/, "");
   }
 
   function dropHero() {
@@ -432,13 +507,20 @@ window.PFApp = (() => {
   }
 
   /* ============================ sending / streaming ============================ */
-  async function send(text, { errors = null, reuseLastUser = false } = {}) {
+  // A dropped stream resumes AUTOMATICALLY: the partial answer is replayed
+  // as assistant context and the server continues from where it stopped
+  // (up to MAX_AUTO_RESUME attempts), so a network hiccup, a browser
+  // offline moment, or a provider cutoff never kills a long build.
+  const MAX_AUTO_RESUME = 3;
+
+  async function send(text, { errors = null, reuseLastUser = false, resumeOf = null } = {}) {
+    const resumeCtx = resumeOf || { attempt: 0, raw: "", aiMsg: null, msgEl: null };
     text = String(text || "").trim();
-    if (!text || streaming) return;
+    if (!text || (streaming && !resumeOf)) return;
     const s = ensureSession();
 
     const skipUser =
-      reuseLastUser && s.messages.length && s.messages[s.messages.length - 1].role === "user";
+      (reuseLastUser || resumeOf) && s.messages.length && s.messages[s.messages.length - 1].role === "user";
 
     if (!skipUser) {
       if (s.messages.length === 0) s.title = text.slice(0, 46);
@@ -450,10 +532,13 @@ window.PFApp = (() => {
       renderModelPicker(); // lock the model now that the conversation started
     }
 
-    const aiMsg = { role: "assistant", content: "", model: null, mode, _live: true };
-    s.messages.push(aiMsg);
-    const msgEl = buildStreamingMsg();
-    $("messages").appendChild(msgEl);
+    // resume keeps the SAME bubble + message record; new turn creates both
+    const aiMsg = resumeCtx.aiMsg || { role: "assistant", content: "", model: null, mode, _live: true };
+    const msgEl = resumeCtx.msgEl || buildStreamingMsg();
+    if (!resumeCtx.msgEl) {
+      s.messages.push(aiMsg);
+      $("messages").appendChild(msgEl);
+    }
     const hud = mode === "agent" ? makeHud(msgEl.querySelector(".msg-body")) : null;
     saveSessions();
     renderSessionList();
@@ -465,12 +550,21 @@ window.PFApp = (() => {
     const statusEl = msgEl.querySelector(".status-line");
     const contentEl = msgEl.querySelector(".msg-content");
     const typingEl = msgEl.querySelector(".typing");
-    let raw = "";
-    let gotFirst = false;
+    let raw = resumeCtx.raw || "";
+    let gotFirst = !!resumeCtx.raw;
     let gotDone = false;
     let renderTimer = null;
     let ingestTimer = null;
     let currentFile = null;
+
+    if (resumeOf) {
+      // resuming a dropped stream — show the reconnect state
+      statusEl.hidden = false;
+      statusEl.querySelector("span:last-child").textContent =
+        "Connection dropped — resuming automatically (" + (resumeCtx.attempt + 1) + "/" + MAX_AUTO_RESUME + ")…";
+      typingEl.hidden = true;
+      if (hud) hud.set("Reconnecting — continuing the build…");
+    }
 
     const scheduleRender = () => {
       if (renderTimer) return;
@@ -493,29 +587,49 @@ window.PFApp = (() => {
       const m = /```file:([^\n`]+)\n/.exec(raw.slice(Math.max(0, raw.length - 400)));
       if (m && m[1] !== currentFile) {
         currentFile = m[1].trim();
-        hud.set("Writing " + currentFile);
+        hud.set("Coding — " + currentFile);
         hud.addFile(currentFile);
       } else if (/SUMMARY:|CONTINUE:/i.test(raw.slice(-120)) && !m) {
         hud.set(/CONTINUE:/i.test(raw.slice(-120)) ? "Continuing build…" : "Wrapping up…");
+      } else if (!m && !currentFile && raw.length > 30) {
+        hud.coding(); // text output, not files — still generating content
       }
     };
 
     // History for the model: assistant turns keep a COMPACT summary of files
     // (paths only) — full contents of current files travel via payload.files,
     // so the model always has live access to its own work without bloating.
-    const history = s.messages.slice(0, -1).map((m) => ({
-      role: m.role,
-      content:
-        m.role === "assistant" && mode === "agent"
-          ? m.content.replace(/```file:([^\n`]+)\n[\s\S]*?```/g, (_mm, p) => `\n[emitted file: ${p.trim()} — current content is in the project files block]\n`)
-          : m.content,
-    }));
+    const historySource = s.messages.slice();
+    if (resumeOf) {
+      // the live aiMsg is the last record; replace with the partial content
+      historySource.splice(historySource.indexOf(aiMsg), 1, { role: "assistant", content: resumeCtx.raw });
+    }
+    const history = historySource
+      .slice(0, resumeOf ? undefined : -1)
+      .map((m) => ({
+        role: m.role,
+        content:
+          m.role === "assistant" && mode === "agent"
+            ? m.content.replace(/```file:([^\n`]+)\n[\s\S]*?```/g, (_mm, p) => `\n[emitted file: ${p.trim()} — current content is in the project files block]\n`)
+            : m.content,
+      }));
 
     const payload = { mode, messages: history };
     if (s.provider) payload.provider = s.provider; // custom provider name
+    // Pin the conversation to the engine model it started with (Qwen/N/L).
+    if (!s.provider) {
+      const pinned = s.engineModel ||
+        (s.messages.find((m) => m.role === "assistant" && m.engineModel) || {}).engineModel;
+      if (pinned) payload.preferredModel = pinned;
+    }
     if (mode === "agent") {
       payload.files = PFAgent.getFiles();
       if (errors && errors.length) payload.errors = errors;
+    }
+    // resume: ask the engine to continue from the exact cutoff point
+    if (resumeOf) {
+      payload.resume = true;
+      payload.partial = resumeCtx.raw.slice(-6000);
     }
 
     try {
@@ -555,7 +669,7 @@ window.PFApp = (() => {
               gotFirst = true;
               statusEl.hidden = true;
               typingEl.hidden = true;
-              if (hud) hud.set("Generating…");
+              if (hud) hud.coding();
             }
             raw += d.text;
             scheduleRender();
@@ -564,6 +678,11 @@ window.PFApp = (() => {
           } else if (d.type === "done") {
             gotDone = true;
             aiMsg.model = d.model ? `${d.provider || ""} · ${d.model}` : null;
+            // remember which ENGINE model answered → pin it for the whole chat
+            if (d.model && !s.provider) {
+              aiMsg.engineModel = String(d.model).split("/").pop();
+              if (!s.engineModel) s.engineModel = aiMsg.engineModel;
+            }
             if (d.search) aiMsg.search = d.search;
           } else if (d.type === "error") {
             throw Object.assign(new Error(d.message || "engine-error"), { details: d.details });
@@ -582,6 +701,26 @@ window.PFApp = (() => {
     clearTimeout(ingestTimer);
     statusEl.hidden = true;
     typingEl.hidden = true;
+
+    // ---- AUTO-RESUME: the stream dropped mid-answer (no done event).
+    // If the user did NOT press stop and we still have budget, reconnect
+    // and continue from the exact cutoff — the user never has to press
+    // "Try again" for a network hiccup.
+    if (!gotDone && !aiMsg._error && raw && abortCtrl && !abortCtrl.signal.aborted &&
+        resumeCtx.attempt < MAX_AUTO_RESUME) {
+      if (hud) hud.set("Reconnecting…");
+      setStreaming(false);
+      resumeCtx.attempt++;
+      resumeCtx.raw = raw;
+      resumeCtx.aiMsg = aiMsg;
+      resumeCtx.msgEl = msgEl;
+      // small backoff before reconnecting (also covers brief offline gaps)
+      setTimeout(() => {
+        send(text, { errors, reuseLastUser: true, resumeOf: resumeCtx });
+      }, 1200);
+      return;
+    }
+
     if (hud) {
       if (raw) hud.remove();
       else hud.set(aiMsg._error ? "Failed" : "Stopped");
@@ -631,21 +770,25 @@ window.PFApp = (() => {
         const note = document.createElement("div");
         note.className = "err-box";
         note.style.marginTop = "10px";
-        note.innerHTML = `<span>⚠ Connection dropped before the answer finished.</span>`;
+        note.innerHTML = `<span>⚠ Connection dropped after ${resumeCtx.attempt} auto-reconnect attempt(s). Continue with:</span>`;
         const again = document.createElement("button");
-        again.textContent = "Try again";
+        again.textContent = "Continue";
         again.addEventListener("click", () => {
-          const s2 = current();
-          if (s2) { s2.messages.pop(); saveSessions(); }
-          msgEl.remove();
-          send(text, { errors, reuseLastUser: true });
+          resumeCtx.attempt = 0;
+          resumeCtx.raw = raw;
+          resumeCtx.aiMsg = aiMsg;
+          resumeCtx.msgEl = msgEl;
+          note.remove();
+          send(text, { errors, reuseLastUser: true, resumeOf: resumeCtx });
         });
         note.appendChild(again);
         contentEl.appendChild(note);
       }
       if (aiMsg.model) {
         const meta = msgEl.querySelector(".msg-meta");
-        meta.insertAdjacentHTML("beforeend", `<span class="model-chip">${PFMD.esc(shortModel(aiMsg.model))}</span>`);
+        if (!meta.querySelector(".model-chip")) {
+          meta.insertAdjacentHTML("beforeend", `<span class="model-chip">${PFMD.esc(shortModel(aiMsg.model))}</span>`);
+        }
       }
       wireMsg(msgEl);
     }
@@ -747,24 +890,34 @@ window.PFApp = (() => {
       $("app").dataset.side = pref;
     }
 
-    // start with a fresh session (tips hero shows immediately)
-    newSession();
+    // Restore the last session — refresh keeps the user in the SAME chat.
+    // A brand-new empty session is only created when none exists at all.
+    if (!current()) newSession();
     renderSessionList();
+    renderModelPicker();
   }
 
   document.addEventListener("DOMContentLoaded", init);
 
   return {
-    toast, send, setProviders,
+    toast, send, setProviders, confirmDialog,
     onUser(u) {
       // called by auth.js when the session exists — load the user's providers
-      // and isolate all local session data under their account key
+      // and isolate all local session data under their account key.
+      // The user's saved currentId is restored, so a page refresh keeps
+      // them in the SAME chat instead of spawning a new one.
+      const wasPublic = lsPrefix === "public";
+      const prevCurrentId = currentId;
       setAccountKey(u?.email || u?.username || "public");
       renderMessages();
       renderSessionList();
       renderModelPicker();
-      PFAgent.reset();
-      newSession();
+      if (currentId !== prevCurrentId || wasPublic) PFAgent.reset();
+      const s = current();
+      if (s) PFAgent.setFiles(s.files || []);
+      setMode((s && s.mode) || mode, { soft: true });
+      // only create a fresh session if the account has none
+      if (!current()) newSession();
       fetch("/api/profile")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (d) setProviders(d.providers || []); })
@@ -774,6 +927,7 @@ window.PFApp = (() => {
       // wipe in-memory data and clear per-account storage on sign-out
       sessions = [];
       currentId = null;
+      saveCurrentId(null);
       try { localStorage.removeItem(sessionsKey()); } catch { /* noop */ }
       renderSessionList();
     },

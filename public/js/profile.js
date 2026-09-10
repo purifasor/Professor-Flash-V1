@@ -56,7 +56,14 @@ window.PFProfile = (() => {
 
   async function removeProvider(p) {
     const name = p.name || p.modelId;
-    if (!confirm(`Remove this provider?\n\n"${name}"\n\nChats keep working — the default engine takes over.`)) return;
+    // in-site confirmation (native confirm() is inconsistent and can be
+    // permanently silenced by browser settings)
+    const yes = await PFApp.confirmDialog(
+      "Remove this provider?",
+      `"${name}" will be removed. Chats keep working — the default engine takes over.`,
+      "Remove"
+    );
+    if (!yes) return;
     try {
       await api("/api/providers", {
         method: "POST",
@@ -131,17 +138,28 @@ window.PFProfile = (() => {
       testResult(false, "Base URL and Model ID are required.");
       return;
     }
+    // loading state on the Save button
+    const btn = $("btnSaveProvider");
+    btn.disabled = true;
+    btn.classList.add("saving");
+    const label = btn.textContent;
+    btn.innerHTML = '<span class="btn-spinner"></span> Saving…';
     try {
-      await api("/api/providers", {
+      const d = await api("/api/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rec),
       });
       $("providerModal").hidden = true;
       if (window.PFApp) PFApp.toast("Provider added — select it under the chat box");
+      // refresh profile → the new provider appears in the list immediately
       await load(user);
     } catch (e) {
       testResult(false, e.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("saving");
+      btn.textContent = label;
     }
   }
 

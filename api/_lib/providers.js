@@ -301,6 +301,9 @@ function* splitChunks(text, size = 28) {
 
 /**
  * Generate an answer with the default engine (priority chain).
+ * `preferredModel` pins the chat to the model that answered its first
+ * message — a conversation started on Qwen stays on Qwen (memory stays
+ * coherent); the chain is only used when the pinned model is unavailable.
  * Returns { text, providerLabel, model }.
  */
 export async function generateAnswer({
@@ -309,6 +312,7 @@ export async function generateAnswer({
   signal,
   onDelta = () => {},
   onStatus = () => {},
+  preferredModel = "",
 }) {
   const roster = getRoster();
   const L = roster.limits;
@@ -322,8 +326,33 @@ export async function generateAnswer({
   const cooldownS = L.rateLimitCooldownS || 90;
   const errors = [];
 
-  for (const prov of roster.providers) {
-    const models = modelsFor(prov, mode);
+  // Priority: Qwen → NVIDIA Nemotron → Ling (roster order). When the chat
+  // already has a pinned model, its PROVIDER goes first and the model goes
+  // first within that provider — the conversation keeps its engine (and
+  // the continuity of its reasoning) while the chain stays as fallback.
+  // Match tolerantly: the client sends the short form (e.g.
+  // "ling-3.0-flash-sante" or "ling-3.0-flash-sante:free") of a roster id
+  // like "inclusionai/ling-3.0-flash-sante:free".
+  const wanted = String(preferredModel || "").trim().toLowerCase();
+  const matchesPin = (m) => {
+    if (!wanted) return false;
+    const full = m.toLowerCase();
+    const short = full.split("/").pop();
+    return full === wanted || short === wanted ||
+      short.replace(/:free$/, "") === wanted.replace(/:free$/, "");
+  };
+  const providersOrdered = roster.providers
+    .map((prov) => {
+      const models = modelsFor(prov, mode);
+      if (!wanted) return { prov, models, pinned: false };
+      const pinned = models.filter(matchesPin);
+      const rest = models.filter((m) => !matchesPin(m));
+      return { prov, models: [...pinned, ...rest], pinned: pinned.length > 0 };
+    })
+    .filter((p) => p.models.length)
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned)); // pinned provider first
+
+  for (const { prov, models } of providersOrdered) {
     const usable = models.filter((m) => !cooled(`${prov.id}:${m}`));
     const list = usable.length ? usable : models;
 

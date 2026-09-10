@@ -97,6 +97,13 @@ export default async function handler(req, res) {
     res.status(400).json({ error: "no-user-message" });
     return;
   }
+  // Model pinning: the conversation keeps the model it started with (e.g.
+  // a chat that began on Qwen stays on Qwen) so its reasoning stays coherent.
+  const preferredModel = typeof body.preferredModel === "string" ? body.preferredModel.slice(0, 120) : "";
+  // Auto-resume: the client detected a dropped stream and sends the partial
+  // answer so the engine continues from the exact cutoff point.
+  const resumePartial = typeof body.partial === "string" ? body.partial.slice(0, 8000) : "";
+  const isResume = body.resume === true && resumePartial.trim().length > 0;
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -134,8 +141,10 @@ export default async function handler(req, res) {
       const sys = mode === "agent" ? agentSystemPrompt() : chatSystemPrompt(lastUser);
       const msgs = [{ role: "system", content: sys }];
 
-      if (mode === "chat") {
-        // live data works for custom providers too
+      // SPEED: fire the user's model IMMEDIATELY; live data + web search
+      // only run for questions that clearly need them (news/current facts).
+      // A simple question must not wait on network fetches.
+      if (mode === "chat" && (NEEDS_WEB.test(lastUser) || NEEDS_NEWS.test(lastUser))) {
         try {
           const live = await gatherLiveData(lastUser);
           if (live) msgs.push({ role: "system", content: live });
@@ -224,9 +233,15 @@ export default async function handler(req, res) {
         });
         return true; // success — the default engine is not needed
       } catch (e) {
-        // The user's provider failed (bad/expired key, rate limit, outage…).
-        // Never dead-end the conversation: fall back to the default
-        // Professor engine chain so the user ALWAYS gets an answer.
+        // The user's provider failed. If we already streamed a substantial
+        // partial answer, KEEP it (mark done with a resume hint) instead of
+        // wiping the turn with a fallback restart — the client auto-resumes.
+        if (collected.trim().length > 400) {
+          sseSend(res, { type: "done", provider: custom.name, model: custom.modelId, search: null });
+          return true;
+        }
+        // Otherwise: never dead-end the conversation — fall back to the
+        // default Professor engine chain so the user ALWAYS gets an answer.
         status(`Your provider failed (${String(e.message || e).slice(0, 80)}) — switching to the default engine…`);
         return false;
       }
@@ -244,11 +259,10 @@ export default async function handler(req, res) {
       if (live) finalMessages.push({ role: "system", content: live });
     } catch { /* best-effort */ }
 
-    // ALWAYS-ON web search for chat mode: quiet freshness check. A full
-    // search runs for news/current/price questions; for everything else a
-    // cheap gate keeps latency down.
+    // Web search for chat mode: only for news/current-event questions —
+    // simple questions answer instantly without waiting on web fetches.
     let searchData = null;
-    if (mode === "chat") {
+    if (mode === "chat" && !isResume) {
       try {
         if (NEEDS_NEWS.test(lastUser)) {
           status("Checking the latest news…");
@@ -260,13 +274,6 @@ export default async function handler(req, res) {
           searchData = await searchWeb(lastUser);
           const ctx = searchContext(searchData);
           if (ctx) finalMessages.push({ role: "system", content: ctx });
-        } else {
-          // light search for any non-trivial question (best-effort, silent)
-          searchData = await searchWeb(lastUser).catch(() => null);
-          if (searchData) {
-            const ctx = searchContext(searchData);
-            if (ctx) finalMessages.push({ role: "system", content: ctx });
-          }
         }
       } catch { /* best-effort */ }
     }
@@ -290,12 +297,29 @@ export default async function handler(req, res) {
 
     finalMessages.push(...messages);
 
+    // Resume a dropped stream: inject the partial answer as an assistant
+    // turn and ask for the continuation from the exact cutoff.
+    if (isResume) {
+      finalMessages.push({ role: "assistant", content: resumePartial });
+      finalMessages.push({
+        role: "user",
+        content:
+          "Your previous answer was cut off right at the point above (connection " +
+          "dropped). CONTINUE from EXACTLY where you stopped. Do NOT restart, do " +
+          "NOT repeat what was already written, do NOT apologize. Continue the " +
+          "answer/build seamlessly to completion" +
+          (mode === "agent" ? " and finish with SUMMARY:." : "."),
+      });
+      status("Resuming the interrupted answer…");
+    }
+
     let result = await generateAnswer({
       messages: finalMessages,
       mode,
       signal: abort.signal,
       onDelta: delta,
       onStatus: status,
+      preferredModel,
     });
 
     // ---- Agent staged pipeline (autopilot: keeps going until complete) ----
@@ -331,6 +355,7 @@ export default async function handler(req, res) {
             signal: abort.signal,
             onDelta: delta,
             onStatus: status,
+            preferredModel,
           });
           continue;
         }
@@ -340,6 +365,7 @@ export default async function handler(req, res) {
           status("Continuing the build…");
           const lastBlock = blocks[blocks.length - 1];
           const cont = await generateAnswer({
+            preferredModel,
             messages: [
               ...finalMessages,
               { role: "assistant", content: result.text },
@@ -366,6 +392,7 @@ export default async function handler(req, res) {
           const list = [...new Set(bad.map((b) => b.path))];
           status("Repairing incomplete files…");
           const fill = await generateAnswer({
+            preferredModel,
             messages: [
               ...finalMessages,
               { role: "assistant", content: result.text },

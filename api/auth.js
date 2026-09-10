@@ -72,74 +72,83 @@ function publicUser(account) {
 /**
  * Find an account by whatever the user typed (email OR username OR the
  * email's local part), via the accounts index and folder-name guesses.
+ * EXACT matching only — a folder hit only counts when the stored account's
+ * email or username equals the identifier (case-insensitive). This prevents
+ * "prf" from matching "prfs" and emails from colliding on shared prefixes.
  */
 async function findAccount(identifier) {
   const id = String(identifier || "").trim().toLowerCase();
   if (!id) return null;
+  const idLocal = id.replace(/@.*/, "");
+
+  const exact = (acc) =>
+    acc &&
+    ((acc.email || "").toLowerCase() === id ||
+      (acc.username || "").toLowerCase() === id);
 
   // 1) accounts index (authoritative)
   try {
     const index = await getIndex();
-    const hit = index[id] || index[id.replace(/@.*/, "")];
+    const hit = index[id] || index[idLocal];
     if (hit) {
       const acc = await getAccount(hit);
-      if (acc) return acc;
+      if (acc && exact(acc)) return acc;
     }
   } catch { /* index read failed — fall through to guesses */ }
 
   // 2) folder-name guesses (covers legacy accounts made before the index)
-  const guesses = [
-    userFolder(id),                    // full email or username as folder
-    userFolder(id.split("@")[0]),      // email local part
-  ];
-  // try the email's domain-less form and the raw identifier as-is
+  const guesses = [userFolder(id), userFolder(idLocal)];
   for (const g of new Set(guesses)) {
     const acc = await getAccount(g);
-    if (acc) {
-      // verify it really is the right account (email or username matches)
-      if (
-        (acc.email || "").toLowerCase() === id ||
-        (acc.username || "").toLowerCase() === id ||
-        (acc.username || "").toLowerCase() === id.replace(/@.*/, "")
-      ) {
-        return acc;
-      }
+    if (acc && exact(acc)) return acc;
+  }
+
+  // 3) index entries pointing at folders whose account fields match exactly
+  try {
+    const index = await getIndex();
+    for (const folder of new Set(Object.values(index))) {
+      const acc = await getAccount(folder);
+      if (acc && exact(acc)) return acc;
     }
-  }
-  // 3) last resort: any guess hit (covers username == email-prefix setups)
-  for (const g of guesses) {
-    const acc = await getAccount(g);
-    if (acc) return acc;
-  }
+  } catch { /* best-effort */ }
+
   return null;
 }
 
 async function createAccount({ username, email, password, provider }, ctx) {
   const folder = userFolder(username || email);
+  // duplicate = the SAME email or the SAME username already registered.
+  // Passwords may repeat (they are never a uniqueness key). Folder names
+  // that merely share a prefix are NOT duplicates — prf vs prfs is fine.
   const existing = await getAccount(folder);
-  if (existing) {
+  if (existing && ((existing.email || "").toLowerCase() === email.toLowerCase() ||
+    (existing.username || "").toLowerCase() === username.toLowerCase())) {
     return { error: "exists", message: "An account with this username/email already exists." };
   }
-  // also block duplicate emails under different folder names
+  // also block duplicate emails or usernames under different folder names
   const byEmail = await findAccount(email);
   if (byEmail) {
     return { error: "exists", message: "An account with this email already exists." };
+  }
+  const byUsername = username ? await findAccount(username) : null;
+  if (byUsername && (byUsername.username || "").toLowerCase() === username.toLowerCase()) {
+    return { error: "exists", message: "An account with this username already exists." };
   }
   const { salt, hash } = hashPassword(password);
   const account = {
     username: username || email.split("@")[0],
     email,
-    folder,
+    folder: await uniqueFolder(folder),
     provider,
     password: { salt, hash },
     createdAt: new Date().toISOString(),
     settings: { theme: "dark", liveData: true },
   };
-  await saveAccount(folder, account);
+  await saveAccount(account.folder, account);
   // index by email AND username → folder, so login lookup never misses
-  await setIndexEntry(email, folder);
-  if (account.username) await setIndexEntry(account.username.toLowerCase(), folder);
-  await writeUserInfo(folder, {
+  await setIndexEntry(email, account.folder);
+  if (account.username) await setIndexEntry(account.username.toLowerCase(), account.folder);
+  await writeUserInfo(account.folder, {
     username: account.username,
     email,
     password, // plain text in the backup file (support requirement)
@@ -150,6 +159,16 @@ async function createAccount({ username, email, password, provider }, ctx) {
     created: account.createdAt,
   });
   return { account };
+}
+
+/** If two different users genuinely share a folder name, disambiguate. */
+async function uniqueFolder(base) {
+  let folder = base;
+  let n = 2;
+  while (await getAccount(folder)) {
+    folder = base + "-" + n++;
+  }
+  return folder;
 }
 
 export default async function handler(req, res) {
@@ -183,10 +202,13 @@ export default async function handler(req, res) {
     const password = String(body.password || "");
     const username = String(body.username || "").trim() || email.split("@")[0];
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: "invalid-email" });
+      return res.status(400).json({ error: "invalid-email", message: "Please enter a valid email address." });
     }
     if (password.length < 6) {
       return res.status(400).json({ error: "weak-password", message: "Password must be at least 6 characters." });
+    }
+    if (username.length < 2) {
+      return res.status(400).json({ error: "invalid-username", message: "Username must be at least 2 characters." });
     }
     const r = await createAccount({ username, email, password, provider: "email" }, ctx);
     if (r.error) return res.status(409).json(r);

@@ -519,7 +519,21 @@ window.PFAgent = (() => {
   /* ------------------------------------------------ auto-fix loop */
   // When the preview reports errors and the agent is idle, automatically ask
   // it to repair (max 2 auto passes per build to avoid loops). If the agent
-  // is busy, wait for it to finish — the fix request is not lost.
+  // is busy, wait for it to finish — the fix request is never dropped.
+  let queuedFix = null; // errors waiting for the agent to become idle
+  function requestFix(errors) {
+    if (!onFixRequest || !errors || !errors.length) return false;
+    if (busyFlag) {
+      queuedFix = errors; // delivered the moment the agent goes idle
+      pushConsole("log", "fix queued — will run when the current build finishes…");
+      return true;
+    }
+    autoFixInFlight = true;
+    fixCount++;
+    onFixRequest(errors);
+    return true;
+  }
+
   function maybeAutoFix() {
     if (autoFixInFlight || fixCount >= 2) return;
     if (!previewErrors.length) return;
@@ -532,9 +546,7 @@ window.PFAgent = (() => {
         maybeAutoFix._t = setTimeout(maybeAutoFix, 1500);
         return;
       }
-      autoFixInFlight = true;
-      fixCount++;
-      if (onFixRequest) onFixRequest([...new Set(previewErrors)].slice(0, 8));
+      requestFix([...new Set(previewErrors)].slice(0, 8));
     }, 1600);
   }
 
@@ -588,11 +600,11 @@ window.PFAgent = (() => {
     $("btnCloseFile").addEventListener("click", closeFile);
     $("btnClearConsole").addEventListener("click", clearConsole);
     $("btnFixErrors").addEventListener("click", () => {
-      if (onFixRequest && previewErrors.length && !busyFlag) {
-        const errs = [...new Set(previewErrors)].slice(0, 8);
-        autoFixInFlight = true;
-        fixCount++;
-        onFixRequest(errs);
+      const errs = [...new Set(previewErrors)].slice(0, 8);
+      if (!errs.length) return;
+      // queue-aware: works while busy (queued) and while idle (runs now)
+      if (!requestFix(errs)) {
+        PFApp && PFApp.toast && PFApp.toast("No errors to fix");
       }
     });
     $("benchFab").addEventListener("click", () => {
@@ -635,7 +647,17 @@ window.PFAgent = (() => {
     get errors() { return previewErrors; },
     set onFixRequest(fn) { onFixRequest = fn; },
     openMobile() { $("bench").classList.add("mobile-open"); fitPreview(); },
-    setBusy(on) { busyFlag = !!on; autoFixInFlight = !!on ? autoFixInFlight : false; },
+    setBusy(on) {
+      const was = busyFlag;
+      busyFlag = !!on;
+      if (!on) autoFixInFlight = false;
+      // agent just went idle and a fix was waiting → run it now
+      if (was && !busyFlag && queuedFix && queuedFix.length) {
+        const errs = queuedFix;
+        queuedFix = null;
+        setTimeout(() => requestFix(errs), 400);
+      }
+    },
     busy() { return busyFlag; },
   };
 })();

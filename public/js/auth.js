@@ -118,9 +118,9 @@ window.PFAuth = (() => {
 
   async function googleSignIn() {
     // Google Identity Services — client ID comes from /api/bootstrap
-    // (GOOGLE_CLIENT_ID env var at deploy time). With a client ID we run a
-    // proper One Tap flow; without it GIS can still show a keyless prompt
-    // on some setups, and if GIS is unavailable we guide the user clearly.
+    // (GOOGLE_CLIENT_ID env var at deploy time). Without a client ID GIS
+    // CANNOT work, so we show a clear in-app message instead of throwing
+    // the cryptic console error ("Missing required parameter: client_id").
     const clientId = await loadGoogleConfig();
     const gis = window.google?.accounts?.id;
     if (gis && clientId) {
@@ -131,14 +131,23 @@ window.PFAuth = (() => {
       gis.prompt();
       return;
     }
-    if (gis) {
-      gis.prompt();
+    if (gis && !clientId) {
+      // GIS loaded but the site has no GOOGLE_CLIENT_ID configured —
+      // surface an actionable message instead of a silent console error.
+      authError("Google sign-in isn't configured on this site yet — use email and password below.");
       return;
     }
     // GIS script not loaded — retry once after a beat, then explain.
-    setTimeout(() => {
+    setTimeout(async () => {
       const gis2 = window.google?.accounts?.id;
-      if (gis2) { gis2.prompt(); return; }
+      if (gis2 && await loadGoogleConfig()) {
+        gis2.initialize({
+          client_id: googleClientId,
+          callback: (response) => response?.credential && sendGoogleToken(response.credential),
+        });
+        gis2.prompt();
+        return;
+      }
       authError("Google sign-in is still loading — or use email and password.");
     }, 1500);
   }

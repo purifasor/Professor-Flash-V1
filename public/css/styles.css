@@ -579,7 +579,7 @@ img { display: block; max-width: 100%; }
   min-height: 3.8em; /* two lines — keeps the layout stable while tips rotate */
   max-width: 640px; margin-inline: auto;
 }
-.hero-sub::after { content: "▌"; color: var(--red-hot); animation: caretBlink 0.9s steps(1) infinite; }
+.hero-sub::after { content: "▌"; color: var(--red-hot); animation: caretBlink 1.3s steps(1) infinite; }
 @keyframes caretBlink { 50% { opacity: 0; } }
 
 /* ===================== messages ===================== */
@@ -767,6 +767,7 @@ img { display: block; max-width: 100%; }
 }
 @keyframes hudSpin { to { transform: rotate(360deg); } }
 .hud-files { display: flex; flex-wrap: wrap; gap: 5px; }
+.hud-files:empty { display: none; }
 .hud-file {
   padding: 2px 9px;
   font-size: 10.5px; font-family: var(--mono);
@@ -818,10 +819,10 @@ img { display: block; max-width: 100%; }
 .typing span {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--red-hot);
-  animation: breathe 1.4s ease-in-out infinite;
+  animation: breathe 2.6s ease-in-out infinite;
 }
-.typing span:nth-child(2) { animation-delay: 0.18s; }
-.typing span:nth-child(3) { animation-delay: 0.36s; }
+.typing span:nth-child(2) { animation-delay: 0.4s; }
+.typing span:nth-child(3) { animation-delay: 0.8s; }
 @keyframes breathe {
   0%, 100% { opacity: 0.25; transform: scale(0.85); }
   50% { opacity: 1; transform: scale(1.15); }
@@ -1169,7 +1170,7 @@ img { display: block; max-width: 100%; }
   max-width: 420px;
   margin-inline: auto;
 }
-.pe-tip::after { content: "▌"; color: var(--red-hot); animation: caretBlink 0.9s steps(1) infinite; }
+.pe-tip::after { content: "▌"; color: var(--red-hot); animation: caretBlink 1.3s steps(1) infinite; }
 
 .preview-status {
   flex: 0 0 auto;
@@ -1572,6 +1573,26 @@ img { display: block; max-width: 100%; }
 .confirm-actions { display: flex; gap: 8px; }
 .confirm-actions .danger-btn { flex: 1; }
 .confirm-actions .tool-btn { flex: 1; justify-content: center; padding: 10px; }
+
+/* in-site confirm dialog */
+.confirm-text {
+  font-size: 13px; color: var(--text-2); line-height: 1.7;
+  margin-bottom: 14px; white-space: pre-line;
+}
+#siteConfirm .confirm-actions .danger-btn { width: auto; }
+
+/* save-provider button spinner */
+.btn-spinner {
+  display: inline-block;
+  width: 13px; height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  vertical-align: -2px;
+  margin-right: 7px;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .logout-btn {
   width: 100%;

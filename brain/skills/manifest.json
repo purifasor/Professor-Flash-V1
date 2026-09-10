@@ -7,7 +7,8 @@
     "game-engineering",
     "design",
     "research",
-    "communication"
+    "communication",
+    "military-intel"
   ],
   "knowledge": [
     "design-tokens",
@@ -17,12 +18,139 @@
   "routing": {
     "$comment": "Optional per-mode skill emphasis. Keys are substrings matched against the user's latest message (first match wins). Matched skills are ALWAYS included; unmatched ones included as space allows. This is how any connected model 'actually uses' the skill bank.",
     "rules": [
-      { "match": ["بازی", "game", "کنتر", "شوتر", "فقط اول شخص", "3d", "۳بعدی", "three"], "skills": ["game-engineering", "debugging", "design", "coding"] },
-      { "match": ["باگ", "bug", "خطا", "error", "دیباگ", "debug", "کار نمیکنه", "کار نمی‌کنه", "لود نشده", "خالیه", "اصلاح", "fix"], "skills": ["debugging", "coding"] },
-      { "match": ["طراحی", "ui", "ظاهر", "تم", "رنگ", "انیمیشن", "قشنگ", "زیبا"], "skills": ["design", "coding"] },
-      { "match": ["قیمت", "دلار", "بیت کوین", "ارز", "بورس", "تومن", "تومان", "نوسان", "crypto", "price"], "skills": ["research"] },
-      { "match": ["ساخت", "بساز", "کد", "برنامه", "اپ", "سایت", "وبسایت", "build", "app", "site", "code"], "skills": ["coding", "design", "debugging"] }
+      {
+        "match": [
+          "سلاح",
+          "اسلحه",
+          "تفنگ",
+          "نظامی",
+          "جنگ",
+          "فشنگ",
+          "کالیبر",
+          "سرباز",
+          "ارتش",
+          "دفاع شخصی",
+          "هسته‌ای",
+          "موشک",
+          "رادار",
+          "استخبارات",
+          "اطلاعات نظامی",
+          "weapon",
+          "gun",
+          "rifle",
+          "military",
+          "sniper",
+          "bullet",
+          "caliber",
+          "artillery",
+          "tank",
+          "drone warfare",
+          "intelligence",
+          "espionage",
+          "self defense",
+          "nuclear",
+          "missile",
+          "armor"
+        ],
+        "skills": [
+          "military-intel"
+        ]
+      },
+      {
+        "match": [
+          "بازی",
+          "game",
+          "کنتر",
+          "شوتر",
+          "فقط اول شخص",
+          "3d",
+          "۳بعدی",
+          "three"
+        ],
+        "skills": [
+          "game-engineering",
+          "debugging",
+          "design",
+          "coding"
+        ]
+      },
+      {
+        "match": [
+          "باگ",
+          "bug",
+          "خطا",
+          "error",
+          "دیباگ",
+          "debug",
+          "کار نمیکنه",
+          "کار نمی‌کنه",
+          "لود نشده",
+          "خالیه",
+          "اصلاح",
+          "fix"
+        ],
+        "skills": [
+          "debugging",
+          "coding"
+        ]
+      },
+      {
+        "match": [
+          "طراحی",
+          "ui",
+          "ظاهر",
+          "تم",
+          "رنگ",
+          "انیمیشن",
+          "قشنگ",
+          "زیبا"
+        ],
+        "skills": [
+          "design",
+          "coding"
+        ]
+      },
+      {
+        "match": [
+          "قیمت",
+          "دلار",
+          "بیت کوین",
+          "ارز",
+          "بورس",
+          "تومن",
+          "تومان",
+          "نوسان",
+          "crypto",
+          "price"
+        ],
+        "skills": [
+          "research"
+        ]
+      },
+      {
+        "match": [
+          "ساخت",
+          "بساز",
+          "کد",
+          "برنامه",
+          "اپ",
+          "سایت",
+          "وبسایت",
+          "build",
+          "app",
+          "site",
+          "code"
+        ],
+        "skills": [
+          "coding",
+          "design",
+          "debugging"
+        ]
+      }
     ],
-    "default": ["reasoning", "communication"]
+    "default": [
+      "reasoning",
+      "communication"
+    ]
   }
 }

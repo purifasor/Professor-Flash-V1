@@ -376,6 +376,22 @@
 <div class="side-backdrop" id="sideBackdrop"></div>
 <div class="toast" id="toast" hidden></div>
 
+<!-- in-site confirm dialog (replaces native browser confirm) -->
+<div class="modal-backdrop" id="siteConfirm" hidden>
+  <div class="modal narrow" role="dialog" aria-label="Confirm">
+    <div class="modal-head">
+      <div class="pm-title"><strong id="siteConfirmTitle">Are you sure?</strong></div>
+    </div>
+    <div class="modal-pane active">
+      <p class="confirm-text" id="siteConfirmText"></p>
+      <div class="confirm-actions">
+        <button id="siteConfirmOk" class="danger-btn solid">Confirm</button>
+        <button id="siteConfirmCancel" class="tool-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js" defer></script>

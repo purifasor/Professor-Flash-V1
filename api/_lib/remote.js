@@ -140,8 +140,35 @@ async function readSSEStream(res, onDelta, firstTokenDeadlineMs = 300000) {
  * Yields content deltas, returns { text, model }. Throws on failure
  * (chat.js shows a red error). Mid-answer connection drops return the
  * partial text with partial:true so the pipeline can resume.
+ * Providers that reject large max_tokens (HTTP 400) are retried smaller.
  */
 export async function streamRemote(
+  { baseUrl, apiKey, modelId, messages, temperature, maxTokens, signal },
+  onDelta
+) {
+  let maxTok = maxTokens ?? 4096;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await streamRemoteOnce(
+        { baseUrl, apiKey, modelId, messages, temperature, maxTokens: maxTok, signal },
+        onDelta
+      );
+    } catch (e) {
+      const msg = String(e?.message || "");
+      const isMaxTokenError =
+        msg.includes("provider-http-400") &&
+        attempt < 2 &&
+        maxTok > 4096;
+      if (isMaxTokenError) {
+        maxTok = Math.max(4096, Math.floor(maxTok / 3));
+        continue; // retry with a smaller budget
+      }
+      throw e;
+    }
+  }
+}
+
+async function streamRemoteOnce(
   { baseUrl, apiKey, modelId, messages, temperature, maxTokens, signal },
   onDelta
 ) {
@@ -186,14 +213,18 @@ export async function streamRemote(
     return { text: ans, model: d?.model || modelId };
   }
 
+  // track what was streamed so a mid-answer death can salvage it
+  let streamed = "";
+  const wrappedDelta = (d) => { streamed += d; onDelta(d); };
   try {
-    const full = await readSSEStream(res, onDelta);
+    const full = await readSSEStream(res, wrappedDelta);
     return { text: full, model: modelId };
   } catch (e) {
-    // If the connection died mid-answer, salvage what arrived — the agent
-    // repair pass will resume from it instead of failing the whole turn.
-    if (e.message === "stream-stalled" || e.message === "first-token-timeout") {
-      throw e;
+    // Mid-answer stream death with substantial content → salvage it as a
+    // PARTIAL answer; the client auto-resume continues from the cutoff.
+    // Never throw away minutes of generation because the socket dropped.
+    if (e.message === "stream-stalled" && streamed.length > 200) {
+      return { text: streamed, model: modelId, partial: true };
     }
     throw e;
   }

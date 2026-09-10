@@ -153,15 +153,25 @@ const INDEX_PATH = "_index.json";
 export async function getIndex() {
   const raw = await getFile(INDEX_PATH);
   if (!raw) return {};
-  try { return JSON.parse(raw); } catch { return {}; }
+  try {
+    const parsed = JSON.parse(raw);
+    // sanitize corrupted entries (a past bug stored non-string values)
+    const clean = {};
+    for (const [k, v] of Object.entries(parsed || {})) {
+      if (typeof v === "string" && v) clean[k] = v;
+    }
+    return clean;
+  } catch { return {}; }
 }
 
 export async function setIndexEntry(key, folder) {
   const k = String(key || "").trim().toLowerCase();
   if (!k || !folder) return;
+  // a previous bug wrote Promise objects into the index; sanitize on write
+  const f = String(folder);
   const index = await getIndex();
-  index[k] = folder;
-  await putFile(INDEX_PATH, JSON.stringify(index, null, 2), `index: ${k} → ${folder}`);
+  index[k] = f;
+  await putFile(INDEX_PATH, JSON.stringify(index, null, 2), `index: ${k} → ${f}`);
 }
 
 const cache = new Map(); // folder -> { account, at }
