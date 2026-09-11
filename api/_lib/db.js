@@ -107,6 +107,73 @@ export async function listDir(dir) {
   return r.data.map((e) => ({ name: e.name, path: e.path, type: e.type }));
 }
 
+// ------------------------------------------------------- size guard + shards
+// GitHub repos scale far past our data size, but the user's rule: when the
+// DB repo grows past 500MB, roll over to a NEW repo (db-2, db-3, …) and
+// keep the chain connected — the old shards stay readable, new writes go
+// to the active shard. A pointer file in each shard records the successor.
+const SHARD_LIMIT_KB = 500 * 1024; // 500MB
+let _sizeCheckedAt = 0;
+
+/** Repo size in KB (GitHub reports size in KB). Cached 10 minutes. */
+async function repoSizeKb() {
+  if (Date.now() - _sizeCheckedAt < 10 * 60 * 1000) return globalThis.__pfDbSizeKb ?? 0;
+  try {
+    const r = await ghJson(`/repos/${REPO}`);
+    const kb = r.ok && r.data?.size ? Number(r.data.size) : 0;
+    globalThis.__pfDbSizeKb = kb;
+    _sizeCheckedAt = Date.now();
+    return kb;
+  } catch {
+    return globalThis.__pfDbSizeKb ?? 0;
+  }
+}
+
+/**
+ * When the active DB shard crosses the 500MB line, create the next shard
+ * repo (purifasor/professor-ai-db-2, -3, …), write a successor pointer in
+ * the old shard, and switch GITHUB_DB_REPO-style writes to it. The chain
+ * stays connected: each shard's _shard.json points forward; account lookups
+ * still prefer the active shard and fall back through the chain.
+ */
+export async function ensureShardCapacity() {
+  const kb = await repoSizeKb();
+  if (kb < SHARD_LIMIT_KB * 0.95) return REPO; // plenty of headroom
+  // read the successor pointer (if a roll already happened)
+  try {
+    const r = await getFile("_shard.json");
+    if (r) {
+      const meta = JSON.parse(r);
+      if (meta.nextRepo && meta.nextRepo !== REPO) return meta.nextRepo; // already rolled
+    }
+  } catch { /* no pointer yet */ }
+  // roll: create next shard repo with the same visibility + README chain link
+  const m = /^(.*?)(\d+)?$/.exec(name());
+  const base = m[1].replace(/-$/, "");
+  const n = m[2] ? Number(m[2]) + 1 : 2;
+  const nextRepoName = `${base}-${n}`;
+  const create = await ghJson(`/user/repos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: nextRepoName,
+      private: true,
+      description: `Professor AI DB shard ${n} — continuation of ${REPO} (auto-rolled at 500MB)`,
+      auto_init: true,
+    }),
+  });
+  if (create.ok) {
+    try {
+      // chain pointer in the OLD shard
+      await putFile("_shard.json", JSON.stringify({ nextRepo: `${owner()}/${nextRepoName}`, rolledAt: new Date().toISOString() }, null, 2), "db: shard rollover pointer");
+    } catch { /* pointer best-effort */ }
+    globalThis.__pfDbSizeKb = 0; // fresh shard
+    _sizeCheckedAt = Date.now();
+    return `${owner()}/${nextRepoName}`;
+  }
+  return REPO; // couldn't create (permissions?) — keep writing to current
+}
+
 // ------------------------------------------------------------------ helpers
 export function slugify(s) {
   return String(s)
@@ -238,6 +305,8 @@ export async function writeUserInfo(folder, { username, email, password, provide
  */
 export async function saveChat(folder, chat) {
   if (!chat || !Array.isArray(chat.messages) || !chat.messages.length) return;
+  // 500MB guard: roll to the next shard repo when this one fills up
+  await ensureShardCapacity().catch(() => {});
   const created = chat.createdAt || new Date().toISOString();
   const d = new Date(created);
   const pad = (n) => String(n).padStart(2, "0");
@@ -271,6 +340,56 @@ export async function saveChat(folder, chat) {
     }
   }
   await putFile(path, parts.join("\n"), `chat: ${folder} ${stamp}`);
+}
+
+/**
+ * Parse a saved chat transcript back into structured messages.
+ * Mirrors the saveChat format (labeled USER/ASSISTANT blocks).
+ */
+export function parseChatFile(raw) {
+  const text = String(raw || "");
+  const get = (k) => {
+    const m = new RegExp(`(?:^|\\n)\\s*${k}\\s*:\\s*(.*)`).exec(text);
+    return m ? m[1].trim() : "";
+  };
+  const messages = [];
+  const blockRe = /┌─+\s*(USER|ASSISTANT)\s*─+┐\n([\s\S]*?)\n└─+┘/g;
+  let m;
+  while ((m = blockRe.exec(text))) {
+    const role = m[1].toLowerCase() === "user" ? "user" : "assistant";
+    const content = m[2].trim();
+    if (content) messages.push({ role, content });
+  }
+  return {
+    title: get("Title") || "Conversation",
+    mode: get("Mode") || "chat",
+    model: get("Model") || "default",
+    messages,
+  };
+}
+
+/**
+ * List a user's saved conversations (newest first), parsed and ready to
+ * restore into the sidebar after a fresh login.
+ */
+export async function listChats(folder, limit = 40) {
+  const entries = await listDir(`${folder}/Chats`).catch(() => []);
+  const files = entries
+    .filter((e) => e.type === "file" && e.name.endsWith(".txt"))
+    .sort((a, b) => b.name.localeCompare(a.name)) // newest first (stamp prefix)
+    .slice(0, limit);
+  const out = [];
+  for (const f of files) {
+    const raw = await getFile(f.path).catch(() => null);
+    if (!raw) continue;
+    const chat = parseChatFile(raw);
+    if (chat.messages.length) {
+      chat.path = f.path;
+      chat.createdAt = f.name.slice(0, 16).replace("_", "T") + "Z";
+      out.push(chat);
+    }
+  }
+  return out;
 }
 
 /** Delete every chat file of a user (clear history). */

@@ -142,7 +142,7 @@ export function chatSystemPrompt(lastUserText = "") {
 export function agentSystemPrompt() {
   const { persona, agentPrompt, bank } = loadParts();
   const all = Object.keys(bank.skills);
-  const prioritized = ["coding", "debugging", "game-engineering", "design"].filter((n) =>
+  const prioritized = ["coding", "debugging", "game-engineering", "performance", "design"].filter((n) =>
     all.includes(n)
   );
   return [
@@ -153,12 +153,23 @@ export function agentSystemPrompt() {
     "FINAL REMINDER (highest priority):\n" +
       "- Run the 4-stage pipeline: ANALYZE → PLAN (task breakdown) → MAP (sync map) → BUILD.\n" +
       "- Output files ONLY as ```file:<path> blocks; complete files; entry = index.html.\n" +
+      "- PERFORMANCE BUDGET (non-negotiable): 60fps — zero per-frame allocations, " +
+      "object pools for particles/projectiles, delta-time everywhere, " +
+      "pixelRatio ≤ 1.5, ≤ 1 shadow light, ≤ 300 meshes. A build that " +
+      "freezes or drops to 1fps is a FAILED build.\n" +
+      "- SELF-TEST before finishing: mentally execute the file top-to-bottom " +
+      "(script order, first frame, every button, win/lose/restart); fix what " +
+      "you find IN THE SAME emission. Never deliver a page that renders blank.\n" +
       "- Persian user ⇒ lang=fa dir=rtl + Vazirmatn + Persian UI text + exact requested theme palette as CSS variables.\n" +
+      "- Persian prose: idiomatic and fluent — Persian punctuation (،؛؟!) and " +
+      "correct ZWNJ (می‌شود، فایل‌ها); never translation-sounding text.\n" +
       "- HTML/CSS/JS must be perfectly synced: every href/src/id/class/function consistent across files.\n" +
       "- Every button and control must actually DO something — zero dead UI, zero placeholders.\n" +
       "- If the token budget runs out, end the current file cleanly and write `CONTINUE:` on its own line.\n" +
+      "- Cinematic craft: win/lose as EVENTS (slow-mo, particles, shake), " +
+      "damage numbers, hit flash, recoil, tracers — games must FEEL alive.\n" +
       "- Everything must actually WORK with zero console errors.\n" +
-      "- End with a SUMMARY: section.",
+      "- End with a SUMMARY: section — concise, in the user's language, NO file contents inside.",
   ]
     .filter(Boolean)
     .join("\n\n");

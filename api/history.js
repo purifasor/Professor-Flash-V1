@@ -1,8 +1,10 @@
-// POST /api/history — save a finished conversation to the user's private DB.
-// Silent best-effort: never blocks the chat UX.
+// GET/POST /api/history — list + save the user's conversations.
+// GET restores the sidebar chat list after re-login (fresh browser, new
+// device, or after sign-out/sign-in) from the private GitHub DB.
+// POST saves a finished conversation. Silent best-effort either way.
 
 import { currentUser } from "./_lib/auth.js";
-import { saveChat } from "./_lib/db.js";
+import { saveChat, listChats } from "./_lib/db.js";
 
 async function readBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -22,6 +24,16 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: "not-authenticated" });
+
+  // ---- GET: list saved conversations (sidebar restore) ----
+  if (req.method === "GET") {
+    try {
+      const chats = await listChats(user.folder, 40);
+      return res.status(200).json({ chats });
+    } catch {
+      return res.status(200).json({ chats: [] }); // best-effort — never block login
+    }
+  }
 
   if (req.method !== "POST") return res.status(405).json({ error: "method-not-allowed" });
 

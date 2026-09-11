@@ -81,6 +81,9 @@ window.PFProfile = (() => {
     if (!user) return;
     $("profileModal").hidden = false;
     renderProfile();
+    // always fetch fresh providers/stats when the modal opens — never show
+    // a stale list
+    load(user).then(() => renderProfile());
   }
   function close() {
     $("profileModal").hidden = true;
@@ -152,8 +155,14 @@ window.PFProfile = (() => {
       });
       $("providerModal").hidden = true;
       if (window.PFApp) PFApp.toast("Provider added — select it under the chat box");
-      // refresh profile → the new provider appears in the list immediately
-      await load(user);
+      // INSTANT update: the save endpoint returns the saved record — add it
+      // to the local list right away, then reconcile with the server.
+      if (d && d.provider && !providers.some((p) => (p.name || p.modelId) === (d.provider.name || d.provider.modelId))) {
+        providers.push(d.provider);
+        if (window.PFApp && PFApp.setProviders) PFApp.setProviders(providers);
+      }
+      renderProfile();
+      await load(user); // reconcile with the server (stats, ordering)
     } catch (e) {
       testResult(false, e.message);
     } finally {

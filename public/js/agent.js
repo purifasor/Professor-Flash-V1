@@ -21,6 +21,10 @@ window.PFAgent = (() => {
   let autoFixInFlight = false;
   let fixCount = 0;
   let busyFlag = false;
+  // true only when THIS page load's agent session emitted files; a preview
+  // restored from a previous session (refresh) is "replay", not "live" —
+  // replay errors show the Fix button but never auto-restart the loop.
+  let liveBuild = false;
 
   /* ------------------------------------------------ parsing */
   function parseFiles(text, { final = false } = {}) {
@@ -59,6 +63,7 @@ window.PFAgent = (() => {
       }
     }
     if (added) {
+      liveBuild = true; // this session produced fresh agent output
       renderTree();
       updateCounts();
       if (opts.final) {
@@ -95,6 +100,8 @@ window.PFAgent = (() => {
     fixCount = 0;
     autoFixInFlight = false;
     busyFlag = false;
+    liveBuild = false;
+    setCoding(false);
     clearTimeout(previewTimer);
     const frame = $("previewFrame");
     try { frame.src = "about:blank"; } catch { /* noop */ }
@@ -294,6 +301,22 @@ window.PFAgent = (() => {
     return html;
   }
 
+  /* ------------------------------------------------ coding overlay */
+  // While the agent is WRITING code, the preview is blurred with a loading
+  // animation on top. The blur lifts when the build finishes — the user
+  // sees the result only when it's actually ready.
+  let codingFile = "";
+  function setCoding(on, file = "") {
+    const el = $("previewCoding");
+    if (!el) return;
+    codingFile = file || codingFile;
+    el.hidden = !on;
+    const f = $("pcoFile");
+    if (f) f.textContent = codingFile ? codingFile : "";
+    const t = el.querySelector(".pco-title");
+    if (t) t.textContent = on ? (codingFile ? "Writing " + codingFile : "Writing code…") : "Writing code…";
+  }
+
   /* ------------------------------------------------ preview */
   function isLocalRef(u) {
     return u && !/^(https?:)?\/\//i.test(u) && !u.startsWith("data:") && !u.startsWith("#");
@@ -464,7 +487,9 @@ window.PFAgent = (() => {
       status.classList.add("err");
       status.textContent = "⚠ " + previewErrors.slice(-3).join("\n⚠ ");
       $("btnFixErrors").hidden = false;
-      maybeAutoFix();
+      // auto-fix ONLY for previews the agent just built in THIS page load —
+      // a restored-after-refresh preview must never re-send the prompt
+      if (liveBuild) maybeAutoFix();
     } else if (d.type === "log") {
       pushConsole("log", d.message);
     } else if (d.type === "ready") {
@@ -642,7 +667,7 @@ window.PFAgent = (() => {
   document.addEventListener("DOMContentLoaded", init);
 
   return {
-    ingest, reset, getFiles, setFiles, parseFiles, buildPreview, switchTab, openFile,
+    ingest, reset, getFiles, setFiles, parseFiles, buildPreview, switchTab, openFile, setCoding,
     pushConsole, fitPreview,
     get errors() { return previewErrors; },
     set onFixRequest(fn) { onFixRequest = fn; },

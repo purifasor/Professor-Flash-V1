@@ -34,7 +34,9 @@ window.PFMD = (() => {
     init();
     let src = String(text || "");
 
-    // pull out file blocks before markdown so their content stays untouched
+    // pull out file blocks before markdown so their content stays untouched.
+    // BOTH closed blocks AND still-streaming unclosed blocks (no ``` yet) are
+    // extracted — raw file content NEVER renders inside the chat feed.
     const fileBlocks = [];
     src = src.replace(/```file:([^\n`]+)\n([\s\S]*?)(?:```|$)/g, (_m, p) => {
       fileBlocks.push(p.trim());

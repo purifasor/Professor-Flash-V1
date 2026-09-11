@@ -87,7 +87,6 @@
       </div>
       <div class="brand-text">
         <strong>Professor AI</strong>
-        <small>PROFESSOR&nbsp;AI</small>
       </div>
       <button class="side-x" id="btnCloseSide" aria-label="Close menu">✕</button>
     </div>
@@ -131,12 +130,7 @@
         </button>
       </div>
 
-      <div class="top-actions">
-        <span class="top-badge" id="powerBadge" title="Web search + MAX thinking always on">
-          <svg viewBox="0 0 24 24" width="13" height="13"><path d="M13 2 4.5 13.5H11l-1 8.5L18.5 10.5H12z" fill="currentColor"/></svg>
-          MAX
-        </span>
-      </div>
+      <div class="top-actions"></div>
     </header>
 
     <main class="main" id="main">
@@ -173,8 +167,7 @@
             <div class="mp-drop" id="modelOptions" role="listbox" aria-label="Choose model" hidden></div>
             <span class="mp-lock" id="mpLock" hidden title="This conversation is locked to its model">🔒</span>
           </div>
-          <div class="composer-hint" id="composerHint">Web search + MAX thinking always on · live prices · fresh answers · <b>your history stays private</b></div>
-        </footer>
+          <div class="composer-hint" id="composerHint">Web search + MAX thinking always on · live prices · fresh answers · <b>your history stays private</b></div>        </footer>
       </section>
 
       <!-- workbench (agent mode) -->
@@ -233,6 +226,14 @@
             <div class="preview-stage" id="previewStage" data-device="desktop" hidden>
               <div class="preview-device">
                 <iframe id="previewFrame" title="Live preview" sandbox="allow-scripts allow-modals allow-forms allow-downloads allow-popups allow-pointer-lock" referrerpolicy="no-referrer"></iframe>
+                <!-- coding overlay: blurred preview + loading animation -->
+                <div class="preview-coding-overlay" id="previewCoding" hidden>
+                  <div class="pco-box">
+                    <div class="pco-spinner"></div>
+                    <div class="pco-title">Writing code…</div>
+                    <div class="pco-file" id="pcoFile"></div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="preview-status" id="previewStatus" hidden></div>

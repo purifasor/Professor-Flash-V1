@@ -286,6 +286,91 @@ async function completeOpenAI({ prov, model, body, signal, timeoutMs = 90000 }) 
   return { text: ans, routedModel: d.model || model };
 }
 
+// ---------------------------------------------------- parallel race engine
+/**
+ * Race every (provider, model) candidate: start all streams at once, wait
+ * for the FIRST real content token; abort the losers and let the winner
+ * finish. Returns the completed result or null if every racer failed
+ * before any token arrived.
+ */
+const _racedThisCall = new Set(); // per-call guard (reset each invocation)
+
+function racedTried(key) {
+  return _racedThisCall.has(key);
+}
+
+async function raceFirstToken({ providersOrdered, body, firstDeadline, signal, onDelta, onStatus, errors }) {
+  _racedThisCall.clear();
+  const racers = [];
+  for (const { prov, models } of providersOrdered) {
+    for (const m of models) {
+      if (cooled(`${prov.id}:${m}`)) continue;
+      racers.push({ prov, m, key: `${prov.id}:${m}` });
+    }
+  }
+  if (!racers.length) return null;
+
+  const outerCtrl = new AbortController();
+  const forwardAbort = () => outerCtrl.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) forwardAbort();
+    else signal.addEventListener("abort", forwardAbort, { once: true });
+  }
+
+  // per-racer stop handles; the winner kills every loser, the winner itself
+  // keeps streaming to completion
+  const stops = new Map(); // key → () => abort that racer only
+  let winnerKey = null;
+
+  const attempts = racers.map(({ prov, m, key }) => {
+    _racedThisCall.add(key);
+    const myCtrl = new AbortController();
+    stops.set(key, () => myCtrl.abort(new Error("race-lost")));
+    outerCtrl.signal.addEventListener("abort", () => myCtrl.abort(new Error("race-lost")), { once: true });
+
+    return (async () => {
+      let collected = "";
+      let first = false;
+      const gen = streamOpenAI({
+        prov,
+        model: m,
+        body,
+        signal: myCtrl.signal,
+        firstTokenDeadlineMs: Math.min(firstDeadline, 45000), // race window
+        onQueueStatus: () => onStatus(`Model ${shortModel(m)} queued — others still racing…`),
+      });
+      for await (const d of gen) {
+        if (!first) {
+          first = true;
+          if (winnerKey === null) {
+            winnerKey = key;
+            onStatus(`Answering on ${prov.label} (${shortModel(m)})…`);
+            for (const [k, stop] of stops) {
+              if (k !== winnerKey) stop(); // kill the losers
+            }
+          }
+          if (winnerKey !== key) return null; // lost the race (already aborted)
+        }
+        collected += d;
+        onDelta(d);
+      }
+      if (!collected.trim()) throw new Error("empty");
+      return { text: collected, providerLabel: prov.label, model: m };
+    })().catch((e) => {
+      if (e?.message === "race-lost" || myCtrl.signal.aborted) return null;
+      errors.push(`race ${prov.id}/${m}: ${e.message}`);
+      cool(`${prov.id}:${m}`, /rate-limit|http-429/.test(e.message) ? 20 : 8);
+      return null;
+    });
+  });
+
+  const settled = await Promise.all(attempts);
+  if (signal) signal.removeEventListener("abort", forwardAbort);
+  const win = settled.find((r) => r && r.text && r.text.trim());
+  if (win) return { ...win, partial: false };
+  return null; // everyone stalled — caller runs the sequential chain
+}
+
 // ------------------------------------------------------------------ engine
 function modelsFor(prov, mode) {
   return (mode === "agent" ? prov.agent : prov.chat) || prov.chat || [];
@@ -352,11 +437,29 @@ export async function generateAnswer({
     .filter((p) => p.models.length)
     .sort((a, b) => Number(b.pinned) - Number(a.pinned)); // pinned provider first
 
+  // ---- RACE MODE: start streams to every candidate model in parallel;
+  // the FIRST one to deliver a real token wins, all others are aborted.
+  // This kills the "queued for 4 minutes while a free model sat idle"
+  // failure mode — the user gets the fastest engine that's actually up.
+  // (Sequential chain stays as the fallback when every racer stalls.)
+  const raced = await raceFirstToken({
+    providersOrdered,
+    body,
+    firstDeadline,
+    signal,
+    onDelta,
+    onStatus,
+    errors,
+  });
+  if (raced) return raced;
+
+  // ---- sequential fallback (racing failed for every candidate) ----
   for (const { prov, models } of providersOrdered) {
     const usable = models.filter((m) => !cooled(`${prov.id}:${m}`));
     const list = usable.length ? usable : models;
 
     for (const m of list) {
+      if (racedTried(`${prov.id}:${m}`)) continue; // already raced & lost
       onStatus(`Connecting to ${prov.label} (${shortModel(m)})…`);
       try {
         const win = await tryStreaming(prov, m, body, {

@@ -246,12 +246,18 @@ window.PFApp = (() => {
   }
 
   const EXT_LANG = { html: "html", css: "css", js: "javascript", json: "json", md: "markdown", svg: "xml", txt: "text", py: "python", cpp: "cpp", ts: "typescript" };
+  // In CHAT mode the agent's ```file: blocks are NOT rendered as code —
+  // file contents live in the workshop Files tab, never in the chat feed.
+  // Anything that looks like a leftover file block / raw HTML dump from a
+  // truncated stream is collapsed to a single tidy chip.
   function chatifyFileBlocks(text) {
-    return String(text).replace(/```file:([^\n`]+)\n([\s\S]*?)(?:```|$)/g, (_m, p, body) => {
-      const ext = (p.trim().split(".").pop() || "").toLowerCase();
-      const lang = EXT_LANG[ext] || "text";
-      return `\`\`\`${lang}\n// ${p.trim()}\n${body}\`\`\``;
-    });
+    return String(text)
+      // complete file blocks → chip
+      .replace(/```file:([^\n`]+)\n[\s\S]*?(?:```|$)/g, (_m, p) => `\n\n\`\`\`file:${p.trim()}\n\`\`\`\n`)
+      // leftover "file:path" marker lines from truncated streams → drop
+      .replace(/^\s*file:[^\s]+\s*$/gm, "")
+      // the "[emitted file: path — note]" summary lines are noise in chat
+      .replace(/\[emitted file:[^\]]*\]/g, "");
   }
 
   function renderContent(text, forMode) {
@@ -269,6 +275,38 @@ window.PFApp = (() => {
       return;
     }
     for (const m of s.messages) box.appendChild(buildMsg(m));
+
+    // After a mid-stream page refresh: the last assistant turn may be
+    // truncated (no clean finish). Offer a manual Continue button on that
+    // bubble — never auto-send (that re-submits the prompt in a loop).
+    const last = s.messages[s.messages.length - 1];
+    if (last && last.role === "assistant" && last.content &&
+        !/(SUMMARY:|CONTINUE:)\s*$/i.test(last.content.trim()) &&
+        s.messages.length > 1) {
+      const msgs = box.querySelectorAll(".msg.ai");
+      const lastBubble = msgs[msgs.length - 1];
+      if (lastBubble && !lastBubble.querySelector(".resume-note")) {
+        const note = document.createElement("div");
+        note.className = "err-box resume-note";
+        note.style.marginTop = "10px";
+        note.innerHTML = "<span>⚠ This answer was cut off. Continue it:</span>";
+        const again = document.createElement("button");
+        again.textContent = "Continue";
+        again.addEventListener("click", () => {
+          const s2 = current();
+          if (!s2) return;
+          const prevUser = [...s2.messages].reverse().find((m) => m.role === "user");
+          const prevAi = [...s2.messages].reverse().find((m) => m.role === "assistant");
+          if (!prevUser || !prevAi) return;
+          const ctx = { attempt: 0, raw: prevAi.content, aiMsg: prevAi, msgEl: lastBubble };
+          note.remove();
+          send(prevUser.content, { reuseLastUser: true, resumeOf: ctx });
+        });
+        note.appendChild(again);
+        const body = lastBubble.querySelector(".msg-content");
+        if (body) body.appendChild(note);
+      }
+    }
     scrollBottom(true);
   }
 
@@ -544,6 +582,10 @@ window.PFApp = (() => {
     renderSessionList();
     scrollBottom(true);
 
+    if (mode === "agent") {
+      // blur the preview with a loading animation for the whole build
+      PFAgent.setCoding(true, resumeCtx.raw ? "" : "");
+    }
     setStreaming(true);
     abortCtrl = new AbortController();
 
@@ -589,6 +631,8 @@ window.PFApp = (() => {
         currentFile = m[1].trim();
         hud.set("Coding — " + currentFile);
         hud.addFile(currentFile);
+        // mirror the current file onto the blurred preview overlay
+        if (mode === "agent") PFAgent.setCoding(true, currentFile);
       } else if (/SUMMARY:|CONTINUE:/i.test(raw.slice(-120)) && !m) {
         hud.set(/CONTINUE:/i.test(raw.slice(-120)) ? "Continuing build…" : "Wrapping up…");
       } else if (!m && !currentFile && raw.length > 30) {
@@ -703,11 +747,13 @@ window.PFApp = (() => {
     typingEl.hidden = true;
 
     // ---- AUTO-RESUME: the stream dropped mid-answer (no done event).
-    // If the user did NOT press stop and we still have budget, reconnect
-    // and continue from the exact cutoff — the user never has to press
-    // "Try again" for a network hiccup.
+    // If the user did NOT press stop, we still have budget, AND the dropped
+    // stream actually produced new content, reconnect and continue from the
+    // exact cutoff. No-new-content drops (provider stuck) stop here — the
+    // user gets a clear Continue button instead of an infinite retry loop.
+    const producedNew = raw.length > (resumeCtx.raw || "").length;
     if (!gotDone && !aiMsg._error && raw && abortCtrl && !abortCtrl.signal.aborted &&
-        resumeCtx.attempt < MAX_AUTO_RESUME) {
+        producedNew && resumeCtx.attempt < MAX_AUTO_RESUME) {
       if (hud) hud.set("Reconnecting…");
       setStreaming(false);
       resumeCtx.attempt++;
@@ -727,6 +773,8 @@ window.PFApp = (() => {
     }
 
     if (mode === "agent") PFAgent.ingest(raw, { final: true });
+    // build finished — lift the blur so the user finally sees the result
+    if (mode === "agent") PFAgent.setCoding(false);
 
     aiMsg.content = raw;
     delete aiMsg._live;
@@ -916,7 +964,49 @@ window.PFApp = (() => {
       const s = current();
       if (s) PFAgent.setFiles(s.files || []);
       setMode((s && s.mode) || mode, { soft: true });
-      // only create a fresh session if the account has none
+
+      // RESTORE: if this browser has no local sessions for the account
+      // (fresh login, new device, sign-out/sign-in), pull the saved
+      // conversations from the private DB so the history is never lost.
+      if (!sessions.length) {
+        fetch("/api/history")
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d && Array.isArray(d.chats) && d.chats.length && !sessions.length) {
+              for (const c of d.chats) {
+                sessions.push({
+                  id: "srv-" + c.path.replace(/[^a-z0-9]/gi, "").slice(-40),
+                  title: c.title || "Conversation",
+                  mode: c.mode === "agent" ? "agent" : "chat",
+                  provider: c.model && c.model !== "default" ? c.model : "",
+                  created: c.createdAt ? Date.parse(c.createdAt) || Date.now() : Date.now(),
+                  messages: (c.messages || []).map((m) => ({
+                    role: m.role,
+                    content: m.content,
+                    model: m.role === "assistant" ? (c.model !== "default" ? c.model : null) : undefined,
+                  })),
+                  files: [],
+                });
+              }
+              // newest-first ordering, then select the most recent chat
+              sessions.sort((a, b) => (b.created || 0) - (a.created || 0));
+              currentId = sessions.length ? sessions[0].id : null;
+              saveCurrentId(currentId);
+              saveSessions();
+              renderMessages();
+              renderSessionList();
+              renderModelPicker();
+              const s2 = current();
+              if (s2) {
+                setMode(s2.mode || "chat", { soft: true });
+                PFAgent.reset();
+              }
+            }
+          })
+          .catch(() => {});
+      }
+
+      // only create a fresh session if the account has none anywhere
       if (!current()) newSession();
       fetch("/api/profile")
         .then((r) => (r.ok ? r.json() : null))

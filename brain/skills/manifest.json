@@ -8,12 +8,14 @@
     "design",
     "research",
     "communication",
-    "military-intel"
+    "military-intel",
+    "performance"
   ],
   "knowledge": [
     "design-tokens",
     "web-dev",
-    "persian"
+    "persian",
+    "asset-banks"
   ],
   "routing": {
     "$comment": "Optional per-mode skill emphasis. Keys are substrings matched against the user's latest message (first match wins). Matched skills are ALWAYS included; unmatched ones included as space allows. This is how any connected model 'actually uses' the skill bank.",
@@ -69,6 +71,7 @@
         ],
         "skills": [
           "game-engineering",
+          "performance",
           "debugging",
           "design",
           "coding"

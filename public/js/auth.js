@@ -119,8 +119,8 @@ window.PFAuth = (() => {
   async function googleSignIn() {
     // Google Identity Services — client ID comes from /api/bootstrap
     // (GOOGLE_CLIENT_ID env var at deploy time). Without a client ID GIS
-    // CANNOT work, so we show a clear in-app message instead of throwing
-    // the cryptic console error ("Missing required parameter: client_id").
+    // CANNOT work; the button is hidden up-front in that case, so reaching
+    // here unconfigured means a race — show the actionable message.
     const clientId = await loadGoogleConfig();
     const gis = window.google?.accounts?.id;
     if (gis && clientId) {
@@ -134,7 +134,7 @@ window.PFAuth = (() => {
     if (gis && !clientId) {
       // GIS loaded but the site has no GOOGLE_CLIENT_ID configured —
       // surface an actionable message instead of a silent console error.
-      authError("Google sign-in isn't configured on this site yet — use email and password below.");
+      authError("Google sign-in needs setup: add GOOGLE_CLIENT_ID in Vercel env, then redeploy. Meanwhile use email and password below.");
       return;
     }
     // GIS script not loaded — retry once after a beat, then explain.
@@ -207,6 +207,14 @@ window.PFAuth = (() => {
     });
     $("authGoogle").addEventListener("click", googleSignIn);
     initGoogle();
+
+    // Google button visibility: only show it when a client ID actually
+    // exists (checked silently at boot). Unconfigured → hide the button
+    // entirely instead of letting users hit a dead end.
+    loadGoogleConfig().then((id) => {
+      const btn = $("authGoogle");
+      if (btn) btn.hidden = !id;
+    });
 
     // Optimistic boot: show the app instantly from the cached user while
     // the session check runs. If the cookie is genuinely gone, only THEN

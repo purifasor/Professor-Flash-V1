@@ -22,7 +22,7 @@ import { gatherLiveData } from "./_lib/tools.js";
 import { streamRemote } from "./_lib/remote.js";
 import { currentUser } from "./_lib/auth.js";
 import { listModels } from "./_lib/db.js";
-import { sseSend } from "./_lib/util.js";
+import { sseSend, sleep } from "./_lib/util.js";
 
 const MAX_HISTORY = 16;
 const MAX_MSG_CHARS = 12000;
@@ -174,8 +174,25 @@ export default async function handler(req, res) {
       msgs.push(...messages);
 
       let collected = "";
+      // Some custom providers reject the FIRST request (cold start, auth
+      // lag, rate window) but succeed on an immediate retry — retry once
+      // on empty before falling back to the default engine.
+      const streamWithRetry = async (opts, onDelta) => {
+        try {
+          return await streamRemote(opts, onDelta);
+        } catch (e) {
+          const msg = String(e?.message || "");
+          const retryable =
+            msg.includes("provider-empty") || msg.includes("first-token-timeout") ||
+            msg.includes("provider-http-429") || msg.includes("provider-http-502") ||
+            msg.includes("provider-http-503");
+          if (!retryable) throw e;
+          status("Provider hiccup — retrying…");
+          return await streamRemote(opts, onDelta); // one silent retry
+        }
+      };
       try {
-        await streamRemote(
+        await streamWithRetry(
           {
             baseUrl: custom.baseUrl,
             apiKey: custom.apiKey,
@@ -198,7 +215,7 @@ export default async function handler(req, res) {
             status(wantsContinue ? "Continuing the build…" : "Completing files…");
             delta("\n\n---\n\n");
             let repair = "";
-            await streamRemote(
+            await streamWithRetry(
               {
                 baseUrl: custom.baseUrl,
                 apiKey: custom.apiKey,
@@ -325,10 +342,15 @@ export default async function handler(req, res) {
     // ---- Agent staged pipeline (autopilot: keeps going until complete) ----
     if (mode === "agent") {
       let pass = 0;
-      const maxPasses = 6;
+      const maxPasses = 8;
+      let selfTested = false;
 
       while (pass < maxPasses) {
         pass++;
+        // pacing between pipeline passes: back-to-back requests against
+        // the same free-tier model burst the rate cache — a short breath
+        // keeps the autopilot running instead of slamming a 429 wall.
+        if (pass > 1) await sleep(1500);
         const blocks = parseFileBlocks(result.text);
         const hasComplete = blocks.some((b) => !b.truncated);
         const bad = blocks.filter((b) => isEmptyFile(b) || b.truncated);
@@ -421,6 +443,57 @@ export default async function handler(req, res) {
           }
           result = { ...fill, text: merged + "\n\n" + fill.text };
           continue;
+        }
+
+        // D) SELF-TEST pass (autopilot): after a structurally complete
+        // build, one verification round — the model reviews its own files
+        // against the checklist and fixes anything broken in the same go.
+        // This is what catches blank pages and dead buttons BEFORE the
+        // user ever sees them.
+        if (!selfTested) {
+          selfTested = true;
+          status("Self-testing the build…");
+          const review = await generateAnswer({
+            preferredModel,
+            messages: [
+              ...finalMessages,
+              { role: "assistant", content: result.text },
+              {
+                role: "user",
+                content:
+                  "SELF-TEST your build before delivery. Re-read every file you emitted " +
+                  "as the browser would: (1) script order & first call — any function " +
+                  "called but never defined? (2) every id/className referenced in JS " +
+                  "exists in the HTML? (3) the game loop starts, one click of every " +
+                  "button works, win/lose reachable, restart resets cleanly? (4) any " +
+                  "truncated function or missing close tag? (5) 60fps rules: per-frame " +
+                  "allocations, pooling, dt usage?\n" +
+                  "If EVERYTHING passes: reply exactly `PASS` and nothing else. " +
+                  "If anything fails: re-emit ONLY the broken file(s) COMPLETELY as " +
+                  "```file:<path> blocks with the fixes applied.",
+              },
+            ],
+            mode,
+            signal: abort.signal,
+            onDelta: delta,
+            onStatus: status,
+          });
+          const verdict = review.text.trim();
+          if (!/^`?PASS`?\s*$/i.test(verdict.slice(0, 60))) {
+            // the review produced fixed files — merge them in
+            const revBlocks = parseFileBlocks(review.text);
+            if (revBlocks.length) {
+              let merged = result.text;
+              for (const b of revBlocks) {
+                merged = merged.replace(
+                  new RegExp("```file:" + b.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\n[\\s\\S]*?```", "g"),
+                  ""
+                );
+              }
+              result = { ...review, text: merged + "\n\n" + review.text };
+              continue; // loop re-checks the fixed build
+            }
+          }
         }
 
         break; // complete
