@@ -486,7 +486,10 @@ window.PFAgent = (() => {
       status.classList.remove("ok");
       status.classList.add("err");
       status.textContent = "⚠ " + previewErrors.slice(-3).join("\n⚠ ");
-      $("btnFixErrors").hidden = false;
+      // Errors NEVER surface mid-build: the Fix button appears only after
+      // the agent finishes the current build (setBusy(false)); until then
+      // errors are collected silently.
+      if (!busyFlag) $("btnFixErrors").hidden = false;
       // auto-fix ONLY for previews the agent just built in THIS page load —
       // a restored-after-refresh preview must never re-send the prompt
       if (liveBuild) maybeAutoFix();
@@ -676,6 +679,9 @@ window.PFAgent = (() => {
       const was = busyFlag;
       busyFlag = !!on;
       if (!on) autoFixInFlight = false;
+      // build finished → NOW pending errors may surface; a clean idle state
+      // hides the button again
+      if (!busyFlag) $("btnFixErrors").hidden = !previewErrors.length;
       // agent just went idle and a fix was waiting → run it now
       if (was && !busyFlag && queuedFix && queuedFix.length) {
         const errs = queuedFix;

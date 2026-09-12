@@ -104,6 +104,26 @@ window.PFApp = (() => {
     const m = $("messages");
     const near = m.scrollHeight - m.scrollTop - m.clientHeight < 220;
     if (force || near) m.scrollTop = m.scrollHeight;
+    updateScrollBtn();
+  }
+
+  // Circular go-to-bottom button: visible whenever the user has scrolled up
+  // away from the newest message (in chat AND agent mode — both share the
+  // messages column). Clicking jumps back to the bottom.
+  function updateScrollBtn() {
+    const m = $("messages");
+    const btn = $("btnScrollDown");
+    if (!btn) return;
+    const away = m.scrollHeight - m.scrollTop - m.clientHeight > 320;
+    btn.hidden = !away;
+  }
+
+  function wireScrollBtn() {
+    const m = $("messages");
+    const btn = $("btnScrollDown");
+    if (!m || !btn) return;
+    m.addEventListener("scroll", updateScrollBtn, { passive: true });
+    btn.addEventListener("click", () => scrollBottom(true));
   }
 
   function setStreaming(on) {
@@ -260,9 +280,19 @@ window.PFApp = (() => {
       .replace(/\[emitted file:[^\]]*\]/g, "");
   }
 
+  // In AGENT mode code NEVER types into the chat feed: file blocks collapse
+  // to chips (fileRenderer) and any other fenced code block collapses to a
+  // one-line workbench note — prose flows underneath, code stays in the
+  // workbench where it belongs.
+  function agentifyContent(text) {
+    return String(text)
+      .replace(/```(?!file:)[^\n`]*\n[\s\S]*?(?:```|$)/g,
+        () => "\n\n> ⚙ Code block — written to the workbench, see the FILES tab\n\n");
+  }
+
   function renderContent(text, forMode) {
     return forMode === "agent"
-      ? PFMD.render(text, { fileRenderer: fileChip })
+      ? PFMD.render(agentifyContent(text), { fileRenderer: fileChip })
       : PFMD.render(chatifyFileBlocks(text));
   }
 
@@ -549,7 +579,7 @@ window.PFApp = (() => {
   // as assistant context and the server continues from where it stopped
   // (up to MAX_AUTO_RESUME attempts), so a network hiccup, a browser
   // offline moment, or a provider cutoff never kills a long build.
-  const MAX_AUTO_RESUME = 3;
+  const MAX_AUTO_RESUME = 5;
 
   async function send(text, { errors = null, reuseLastUser = false, resumeOf = null } = {}) {
     const resumeCtx = resumeOf || { attempt: 0, raw: "", aiMsg: null, msgEl: null };
@@ -557,8 +587,12 @@ window.PFApp = (() => {
     if (!text || (streaming && !resumeOf)) return;
     const s = ensureSession();
 
-    const skipUser =
-      (reuseLastUser || resumeOf) && s.messages.length && s.messages[s.messages.length - 1].role === "user";
+    // Resuming NEVER re-sends the user's message: during a resume the last
+    // stored record is the live ASSISTANT turn, so the old role check wrongly
+    // re-pushed (and re-rendered) the user message above the answer. A resume
+    // always continues the existing turn in place.
+    const skipUser = !!resumeOf ||
+      (reuseLastUser && s.messages.length && s.messages[s.messages.length - 1].role === "user");
 
     if (!skipUser) {
       if (s.messages.length === 0) s.title = text.slice(0, 46);
@@ -760,10 +794,11 @@ window.PFApp = (() => {
       resumeCtx.raw = raw;
       resumeCtx.aiMsg = aiMsg;
       resumeCtx.msgEl = msgEl;
-      // small backoff before reconnecting (also covers brief offline gaps)
+      // progressive backoff before reconnecting (1.2s → 3s) — also covers
+      // brief offline gaps without hammering a struggling provider
       setTimeout(() => {
         send(text, { errors, reuseLastUser: true, resumeOf: resumeCtx });
-      }, 1200);
+      }, Math.min(3000, 1200 * resumeCtx.attempt));
       return;
     }
 
@@ -879,6 +914,7 @@ window.PFApp = (() => {
   /* ============================ init ============================ */
   function init() {
     $("messages").innerHTML = "";
+    wireScrollBtn();
 
     $("btnModeChat").addEventListener("click", () => setMode("chat"));
     $("btnModeAgent").addEventListener("click", () => setMode("agent"));

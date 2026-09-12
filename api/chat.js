@@ -127,10 +127,14 @@ export default async function handler(req, res) {
     let custom = null;
     if (user) {
       const saved = await listModels(user.folder).catch(() => []);
+      // Use a custom provider ONLY when the user explicitly selected one for
+      // this conversation (body.provider). An empty selection ALWAYS means
+      // the default Professor engine — never silently fall back to the
+      // first active custom provider, which ignored the user's Default pick.
       const wanted = String(body.provider || "").trim();
       const rec = wanted
         ? saved.find((p) => p.name === wanted || p.modelId === wanted)
-        : saved.find((p) => p.status === "active"); // first active provider
+        : null;
       if (rec) custom = rec;
     }
 
