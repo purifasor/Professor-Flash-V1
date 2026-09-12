@@ -1,5 +1,5 @@
 {
-  "$comment": "Professor engine roster v5 — user-selectable engines, live-tested 2026-09-12. Every endpoint below answered a real Persian probe. The client picker shows these exact labels; 'engine:<id>' travels in the provider field and the server pins that model first with the rest as automatic fallback. Legacy endpoints that closed (unturf qwen subdomain, opencode, cloudflare ws, kilo paid tiers) are gone.",
+  "$comment": "Professor engine roster v5.2 — user-selectable engines, live-tested 2026-09-12. Pollinations relay removed (budget-locked, served error text as content). Llama slot replaced by Kilo free tier: Nex N2.5 Mini (verified stable, clean Persian). No 'Default'/'Auto' option — a concrete model is always selected (first = Qwen 3.8). 'engine:<id>' pins that exact model; fallback only on structural failure.",
   "providers": [
     {
       "id": "ovh",
@@ -7,8 +7,14 @@
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       "type": "openai",
       "reasoningOff": false,
-      "chat": ["Qwen3.8-27B", "Qwen3.5-397B-A17B"],
-      "agent": ["Qwen3.8-27B", "Qwen3.5-397B-A17B"]
+      "chat": [
+        "Qwen3.8-27B",
+        "Qwen3.5-397B-A17B"
+      ],
+      "agent": [
+        "Qwen3.8-27B",
+        "Qwen3.5-397B-A17B"
+      ]
     },
     {
       "id": "unturf",
@@ -16,8 +22,12 @@
       "url": "https://hermes.ai.unturf.com/v1/chat/completions",
       "type": "openai",
       "reasoningOff": false,
-      "chat": ["Lorbus/Qwen3.6-27B-int4-AutoRound"],
-      "agent": ["Lorbus/Qwen3.6-27B-int4-AutoRound"]
+      "chat": [
+        "Lorbus/Qwen3.6-27B-int4-AutoRound"
+      ],
+      "agent": [
+        "Lorbus/Qwen3.6-27B-int4-AutoRound"
+      ]
     },
     {
       "id": "kilo",
@@ -28,31 +38,18 @@
       "chat": [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-3.5-lightning:free"
+        "nvidia/nemotron-3.5-lightning:free",
+        "nex-agi/nex-n2.5-mini:free"
       ],
       "agent": [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-3.5-lightning:free"
+        "nvidia/nemotron-3.5-lightning:free",
+        "nex-agi/nex-n2.5-mini:free"
       ]
-    },
-    {
-      "id": "pollinations",
-      "label": "Llama 3.3 70B Relay",
-      "url": "https://text.pollinations.ai/openai",
-      "type": "openai",
-      "reasoningOff": false,
-      "chat": ["openai-fast"],
-      "agent": ["openai-fast"]
     }
   ],
   "options": [
-    {
-      "id": "auto",
-      "label": "Auto — best available",
-      "chat": "Qwen3.8-27B",
-      "agent": "nvidia/nemotron-3-ultra-550b-a55b:free"
-    },
     {
       "id": "qwen",
       "label": "Qwen 3.8",
@@ -85,9 +82,9 @@
     },
     {
       "id": "llama",
-      "label": "Llama 3.3 70B",
-      "chat": "openai-fast",
-      "agent": "openai-fast"
+      "label": "Nex N2.5 Mini",
+      "chat": "nex-agi/nex-n2.5-mini:free",
+      "agent": "nex-agi/nex-n2.5-mini:free"
     }
   ],
   "limits": {

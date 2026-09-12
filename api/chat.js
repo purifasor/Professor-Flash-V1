@@ -103,7 +103,9 @@ export default async function handler(req, res) {
   // Engine selection from the model picker: values look like "engine:<id>"
   // (e.g. engine:nemotron-ultra). Resolved against roster.options — the user
   // picks a MODEL and that exact engine goes FIRST in the chain, with the
-  // rest of the roster kept as automatic fallback.
+  // rest of the roster kept as automatic fallback. Legacy clients / empty
+  // selections resolve to the first roster option (there is no "Default"
+  // label anymore — a concrete model is always chosen).
   const selRaw = String(body.provider || "").trim();
   const isEngineSel = selRaw.startsWith("engine:");
   let engineModel = "";
@@ -112,6 +114,10 @@ export default async function handler(req, res) {
     const opts = getRoster().options || [];
     const opt = opts.find((o) => o && o.id === selId);
     engineModel = opt ? (mode === "agent" ? opt.agent || opt.chat : opt.chat || opt.agent) || "" : selId;
+  } else if (!selRaw) {
+    const opts = getRoster().options || [];
+    const first = opts[0];
+    engineModel = first ? (mode === "agent" ? first.agent || first.chat : first.chat || first.agent) || "" : "";
   }
   const effPref = engineModel || preferredModel;
   // Auto-resume: the client detected a dropped stream and sends the partial

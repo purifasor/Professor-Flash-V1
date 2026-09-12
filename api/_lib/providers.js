@@ -2,7 +2,7 @@
 // Roster v5 — live-tested 2026-09-12, read from brain/models.json:
 //   1) OVH Qwen3.8-27B (default chat) 2) Unturf Qwen3.6 Coder
 //   3) Kilo Nemotron-3-Ultra-550B (default agent) → Kilo Nemotron-3-Super
-//   → Kilo Nemotron-3.5-Lightning → pollinations Llama relay.
+//   → Kilo Nemotron-3.5-Lightning → Kilo Nex N2.5 Mini.
 //
 // Engine hardening for slow/queued providers (Nemotron-Ultra can queue for
 // minutes behind "KILO PROCESSING" SSE comments):
@@ -70,22 +70,16 @@ const FALLBACK_ROSTER = {
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3.5-lightning:free",
+        "nex-agi/nex-n2.5-mini:free",
       ],
       agent: [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3.5-lightning:free",
+        "nex-agi/nex-n2.5-mini:free",
       ],
     },
-    {
-      id: "pollinations",
-      label: "Llama 3.3 70B Relay",
-      url: "https://text.pollinations.ai/openai",
-      type: "openai",
-      reasoningOff: false,
-      chat: ["openai-fast"],
-      agent: ["openai-fast"],
-    },
+
   ],
   limits: {
     chatMaxTokens: 4096,
@@ -312,16 +306,11 @@ async function completeOpenAI({ prov, model, body, signal, timeoutMs = 90000 }) 
  * Race every (provider, model) candidate: start all streams at once, wait
  * for the FIRST real content token; abort the losers and let the winner
  * finish. Returns the completed result or null if every racer failed
- * before any token arrived.
+ * before any token arrived. `tried` is caller-scoped so a request that
+ * runs multiple races (pin first, then fallback) never double-tries.
  */
-const _racedThisCall = new Set(); // per-call guard (reset each invocation)
-
-function racedTried(key) {
-  return _racedThisCall.has(key);
-}
-
-async function raceFirstToken({ providersOrdered, body, firstDeadline, signal, onDelta, onStatus, errors }) {
-  _racedThisCall.clear();
+async function raceFirstToken({ providersOrdered, body, firstDeadline, signal, onDelta, onStatus, errors, tried }) {
+  const racedThisCall = tried || new Set();
   const racers = [];
   for (const { prov, models } of providersOrdered) {
     for (const m of models) {
@@ -344,7 +333,7 @@ async function raceFirstToken({ providersOrdered, body, firstDeadline, signal, o
   let winnerKey = null;
 
   const attempts = racers.map(({ prov, m, key }) => {
-    _racedThisCall.add(key);
+    racedThisCall.add(key);
     const myCtrl = new AbortController();
     stops.set(key, () => myCtrl.abort(new Error("race-lost")));
     outerCtrl.signal.addEventListener("abort", () => myCtrl.abort(new Error("race-lost")), { once: true });
@@ -492,17 +481,26 @@ export async function generateAnswer({
     // exist on more than one provider), then everyone else as fallback
     .sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
-  // ---- PINNED-EXCLUSIVE: when the user picked a specific engine, run a
-  // SHORT race among just that engine's candidates first (models on the same
-  // endpoint share a rate window, so racing siblings is safe) and only fall
-  // back to the full roster when the pick genuinely cannot answer. This is
-  // what makes "user chose Qwen" actually mean "Qwen answers".
+  // ---- PINNED-EXCLUSIVE: the user picked a specific engine — that engine
+  // answers, full stop. Only the PINNED MODEL itself is attempted (never its
+  // provider siblings — a Kilo pin must not be answered by a cousin model),
+  // with queue-tolerant retries; only a structural failure (404/403/401 =
+  // model or endpoint gone) falls back to the roster.
   if (wanted) {
-    const pinnedProviders = providersOrdered.filter((p) => p.pinned);
-    if (pinnedProviders.length) {
-      onStatus(`Connecting to your model (${shortModel(providersOrdered[0].models[0])})…`);
+    const pinnedSet = []; // {prov, model} — the exact pinned model, on every provider that carries it
+    for (const { prov, models, pinned } of providersOrdered) {
+      if (!pinned) continue;
+      for (const m of models) if (matchesPin(m)) pinnedSet.push({ prov, model: m });
+    }
+    if (pinnedSet.length) {
+      const isStructural = (msg) =>
+        /http-40[1345]/.test(msg) && !/http-429/.test(msg);
+      let structuralFail = false;
+      onStatus(`Connecting to your model (${shortModel(pinnedSet[0].model)})…`);
+
+      // round 1: race the pinned model across its providers (usually one)
       const pinnedRace = await raceFirstToken({
-        providersOrdered: pinnedProviders,
+        providersOrdered: pinnedSet.map(({ prov, model }) => ({ prov, models: [model] })),
         body,
         firstDeadline,
         signal,
@@ -511,12 +509,15 @@ export async function generateAnswer({
         errors,
       });
       if (pinnedRace) return pinnedRace;
-      // pinned engine raced out — one sequential try on the pinned model
-      // (long queue window) before touching the fallback roster
-      for (const { prov, models } of pinnedProviders) {
-        for (const m of models.slice(0, 1)) {
+
+      // rounds 2-3: patient sequential tries on the PINNED MODEL only —
+      // free engines queue behind "KILO PROCESSING" keepalives and need the
+      // full first-token window; two beats with a pause between them
+      for (let attempt = 0; attempt < 2 && !structuralFail; attempt++) {
+        for (const { prov, model } of pinnedSet) {
           try {
-            const win = await tryStreaming(prov, m, body, {
+            onStatus(`Your model is busy — holding the line (${shortModel(model)})…`);
+            const win = await tryStreaming(prov, model, body, {
               firstTokenDeadlineMs: firstDeadline,
               signal,
               onDelta,
@@ -526,21 +527,33 @@ export async function generateAnswer({
               return { ...win, providerLabel: prov.label, model: win.model, partial: !!win.partial };
             }
           } catch (e) {
-            errors.push(`pinned ${prov.id}/${m}: ${e.message}`);
+            const msg = String(e.message || "");
+            errors.push(`pinned ${prov.id}/${model}: ${msg}`);
+            if (isStructural(msg)) { structuralFail = true; break; }
           }
         }
+        if (structuralFail) break;
+        if (attempt === 0) await sleep(3000); // one breath before the retry
       }
-      onStatus("Your model is busy — switching to the best available engine…");
+
+      // fall out of the pin ONLY when it structurally cannot answer;
+      // a merely-busy pin gets the full-roster race as the safety net
+      if (structuralFail) {
+        onStatus("Your selected model is unreachable — switching to the best available engine…");
+      } else {
+        onStatus("Your selected model is fully busy right now — switching engines to answer you…");
+      }
     }
   }
 
-  // ---- RACE MODE (auto / no pick): start streams to the default candidate
-  // models in parallel; the FIRST one to deliver a real token wins, all
-  // others are aborted. This kills the "queued for 4 minutes while a free
-  // model sat idle" failure mode — the user gets the fastest engine that's
-  // actually up. (Sequential chain stays as the fallback when every racer
-  // stalls.) A user-pinned engine never enters this branch (handled above).
-  const raced = await raceFirstToken({
+  // ---- RACE MODE (no pin / pin structurally dead): start streams to the
+  // default candidate models in parallel; the FIRST one to deliver a real
+  // token wins, all others are aborted. This kills the "queued for 4 minutes
+  // while a free model sat idle" failure mode — the user gets the fastest
+  // engine that's actually up. (Sequential chain stays as the fallback when
+  // every racer stalls.) A user-pinned engine only reaches this branch after
+  // its dedicated attempts failed (see PINNED-EXCLUSIVE above).
+  const racedFallback = await raceFirstToken({
     providersOrdered,
     body,
     firstDeadline,
@@ -549,15 +562,15 @@ export async function generateAnswer({
     onStatus,
     errors,
   });
-  if (raced) return raced;
+  if (racedFallback) return racedFallback;
 
   // ---- sequential fallback (racing failed for every candidate) ----
+  const triedAnywhere = new Set(); // this request's already-attempted models
   for (const { prov, models } of providersOrdered) {
     const usable = models.filter((m) => !cooled(`${prov.id}:${m}`));
     const list = usable.length ? usable : models;
 
     for (const m of list) {
-      if (racedTried(`${prov.id}:${m}`)) continue; // already raced & lost
       onStatus(`Connecting to ${prov.label} (${shortModel(m)})…`);
       try {
         const win = await tryStreaming(prov, m, body, {

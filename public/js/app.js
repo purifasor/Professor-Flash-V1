@@ -149,7 +149,7 @@ window.PFApp = (() => {
       id: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: "New chat",
       mode,
-      provider: loadLastModel(), // remember the last selected model
+      provider: normalizeEngine(loadLastModel()), // last chosen engine, migrated
       created: Date.now(),
       messages: [],
       files: [],
@@ -451,7 +451,8 @@ window.PFApp = (() => {
     if (s.includes("nemotron-3-ultra")) return "Nemotron-3-Ultra 550B";
     if (s.includes("nemotron-3-super")) return "Nemotron-3-Super 120B";
     if (s.includes("nemotron-3.5-lightning")) return "Nemotron-3.5 Lightning";
-    if (s.includes("openai-fast") || s.includes("gpt-oss")) return "Llama 3.3 70B";
+    if (s.includes("openai-fast") || s.includes("gpt-oss")) return "Nex N2.5 Mini";
+    if (s.includes("nex-n2.5-mini")) return "Nex N2.5 Mini";
     return modelId.split("/").pop().replace(/:free$/, "");
   }
 
@@ -465,15 +466,33 @@ window.PFApp = (() => {
   // routes to a live-tested free endpoint; "engine:<id>" travels in the
   // provider field and the server pins that exact model first.
   const ENGINES = [
-    { id: "auto", label: "Auto — best available" },
     { id: "qwen", label: "Qwen 3.8" },
     { id: "qwen-coder", label: "Qwen 3.6 Coder" },
     { id: "nemotron-ultra", label: "Nemotron-3-Ultra 550B" },
     { id: "nemotron-super", label: "Nemotron-3-Super 120B" },
     { id: "nemotron-lightning", label: "Nemotron-3.5 Lightning" },
-    { id: "llama", label: "Llama 3.3 70B" },
+    { id: "llama", label: "Nex N2.5 Mini" },
   ];
-  const engineLabel = (id) => (ENGINES.find((e) => e.id === id) || {}).label || id;
+  const DEFAULT_ENGINE = "engine:qwen";
+  // legacy engine ids from older versions → current ids
+  const ENGINE_MIGRATION = {
+    auto: "qwen", "qwen-max": "qwen", ling: "nemotron-super",
+    step: "nemotron-lightning", "gpt-oss": "llama",
+  };
+  // Normalize any stored/legacy selection to a live engine id. Custom
+  // provider names pass through untouched.
+  function normalizeEngine(v) {
+    const raw = String(v || "").trim();
+    if (!raw) return DEFAULT_ENGINE;
+    if (!raw.startsWith("engine:")) return raw; // custom provider name
+    const id = raw.slice(7);
+    const mapped = ENGINE_MIGRATION[id] || id;
+    return ENGINES.some((e) => e.id === mapped) ? "engine:" + mapped : DEFAULT_ENGINE;
+  }
+  const engineLabel = (id) => {
+    const eng = String(id || "").replace(/^engine:/, "");
+    return (ENGINES.find((e) => e.id === eng) || {}).label || eng;
+  };
 
   // Per-conversation lock: once a session has messages, its provider is fixed.
   // The last choice is remembered and becomes the default for new chats.
@@ -481,12 +500,12 @@ window.PFApp = (() => {
 
   function chosenProvider() {
     const s = current();
-    if (s && s.provider) return s.provider;
-    return loadLastModel();
+    if (s && s.provider) return normalizeEngine(s.provider);
+    return normalizeEngine(loadLastModel());
   }
 
   function providerLabel(v) {
-    if (!v) return engineLabel("auto");
+    if (!v) return engineLabel(DEFAULT_ENGINE);
     if (v.startsWith("engine:")) return engineLabel(v.slice(7));
     const p = providers.find((x) => (x.name || x.modelId) === v);
     return p ? p.name || p.modelId : v;
@@ -502,10 +521,11 @@ window.PFApp = (() => {
     const stillThere = (v) =>
       !v || v.startsWith("engine:") || providers.some((x) => (x.name || x.modelId) === v);
     if (!stillThere(loadLastModel())) {
-      saveLastModel("");
+      saveLastModel(DEFAULT_ENGINE);
     }
     for (const s of sessions) {
-      if (s.provider && !stillThere(s.provider)) s.provider = "";
+      s.provider = normalizeEngine(s.provider);
+      if (s.provider && !stillThere(s.provider)) s.provider = DEFAULT_ENGINE;
     }
     saveSessions();
     renderModelPicker();
@@ -519,27 +539,23 @@ window.PFApp = (() => {
     const locked = s && s.messages && s.messages.length > 0;
     const chosen = chosenProvider();
 
-    // Auto maps to "" (default engine). When the session picked Auto but a
-    // stale engineModel pin exists from an earlier turn, clear it so the
-    // default engine really serves the next message.
     const mk = (label, value, kind) => {
       const b = document.createElement("button");
-      b.className = "mp-option" + ((value || "") === chosen ? " active" : "") + (kind === "custom" ? " custom" : "");
-      b.dataset.provider = value || "";
+      b.className = "mp-option" + (value === chosen ? " active" : "") + (kind === "custom" ? " custom" : "");
+      b.dataset.provider = value;
       b.setAttribute("role", "option");
-      const tag = kind === "custom" ? "custom" : kind === "engine" ? "engine" : "auto";
+      const tag = kind === "custom" ? "custom" : "engine";
       b.innerHTML =
         `<span class="mp-name">${PFMD.esc(label)}</span>` +
         `<span class="mp-tag">${tag}</span>`;
-      b.disabled = locked && (value || "") !== chosen;
+      b.disabled = locked && value !== chosen;
       b.addEventListener("click", () => {
         if (locked) return;
         const sess = ensureSession();
-        sess.provider = value || "";
-        // "Auto" resets BOTH the conversation pick and the remembered default
-        // (no stale engineModel pin re-routing the next turn)
-        saveLastModel(value || "");
-        if (!value) sess.engineModel = "";
+        sess.provider = value;
+        // remember for the next new chat + drop any stale engine-model pin
+        saveLastModel(value);
+        sess.engineModel = "";
         saveSessions();
         setMpOpen(false);
         renderModelPicker();
@@ -548,7 +564,7 @@ window.PFApp = (() => {
     };
 
     for (const e of ENGINES) {
-      box.appendChild(mk(e.label, e.id === "auto" ? "" : "engine:" + e.id, e.id === "auto" ? "auto" : "engine"));
+      box.appendChild(mk(e.label, "engine:" + e.id, "engine"));
     }
     for (const p of providers) {
       box.appendChild(mk(p.name || p.modelId, p.name || p.modelId, "custom"));
@@ -755,9 +771,12 @@ window.PFApp = (() => {
       }));
 
     const payload = { mode, messages: history };
-    if (s.provider) payload.provider = s.provider; // custom provider name
-    // Pin the conversation to the engine model it started with (Qwen/N/L).
-    if (!s.provider) {
+    // The model picker ALWAYS has a concrete engine (or custom provider)
+    // selected — send it so the server pins exactly that model.
+    payload.provider = normalizeEngine(s.provider);
+    // conversations started before a model was picked: pin the engine that
+    // actually answered, keeping mid-conversation continuity
+    if (payload.provider.startsWith("engine:")) {
       const pinned = s.engineModel ||
         (s.messages.find((m) => m.role === "assistant" && m.engineModel) || {}).engineModel;
       if (pinned) payload.preferredModel = pinned;
@@ -914,7 +933,7 @@ window.PFApp = (() => {
           key: sNow?.id || "", // stable per-chat file on the server
           title: sNow?.title || "Conversation",
           mode,
-          model: sNow?.provider || "default",
+          model: sNow?.provider || "engine:qwen",
           createdAt: new Date(sNow?.created || Date.now()).toISOString(),
           messages: (sNow?.messages || []).filter((m) => !m._live && m.content),
         }),
@@ -1149,12 +1168,12 @@ window.PFApp = (() => {
               id: "srv-" + key,
               title: c.title || "Conversation",
               mode: c.mode === "agent" ? "agent" : "chat",
-              provider: c.model && c.model !== "default" ? c.model : "",
+              provider: normalizeEngine(c.model && c.model !== "default" ? c.model : ""),
               created: c.createdAt ? Date.parse(c.createdAt) || Date.now() : Date.now(),
               messages: (c.messages || []).map((m) => ({
                 role: m.role,
                 content: m.content,
-                model: m.role === "assistant" ? (c.model !== "default" ? c.model : null) : undefined,
+                model: m.role === "assistant" ? (c.model && c.model !== "default" ? c.model : null) : undefined,
               })),
               files: [],
             });
