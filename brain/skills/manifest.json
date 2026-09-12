@@ -9,7 +9,9 @@
     "research",
     "communication",
     "military-intel",
-    "performance"
+    "performance",
+    "counselor",
+    "business-rare-ideas"
   ],
   "knowledge": [
     "design-tokens",
@@ -20,6 +22,81 @@
   "routing": {
     "$comment": "Optional per-mode skill emphasis. Keys are substrings matched against the user's latest message (first match wins). Matched skills are ALWAYS included; unmatched ones included as space allows. This is how any connected model 'actually uses' the skill bank.",
     "rules": [
+      {
+        "match": [
+          "ایده",
+          "بیزنس",
+          "بیزینس",
+          "کسب",
+          "درآمد",
+          "درامد",
+          "پول",
+          "شروع",
+          "استارتاپ",
+          "کاری",
+          "پولساز",
+          "سود",
+          "فروش",
+          "بازار",
+          "سرمایه",
+          "idea",
+          "business",
+          "income",
+          "money",
+          "startup",
+          "side hustle",
+          "monetize",
+          "sell",
+          "market",
+          "profit",
+          "earn"
+        ],
+        "skills": [
+          "business-rare-ideas",
+          "reasoning",
+          "research",
+          "communication"
+        ]
+      },
+      {
+        "match": [
+          "مشاور",
+          "مشورت",
+          "شغل",
+          "شغلی",
+          "رشته",
+          "دانشگاه",
+          "مهاجرت",
+          "تحصیل",
+          "تحصیلی",
+          "زندگی",
+          "ازدواج",
+          "رابطه",
+          "استرس",
+          "اضطراب",
+          "افسرده",
+          "ترس",
+          "دلسوزی",
+          "career",
+          "counsel",
+          "advice",
+          "university",
+          "major",
+          "college",
+          "life advice",
+          "relationship",
+          "anxiety",
+          "depress",
+          "study abroad",
+          "migrate",
+          "emigrat"
+        ],
+        "skills": [
+          "counselor",
+          "reasoning",
+          "communication"
+        ]
+      },
       {
         "match": [
           "سلاح",

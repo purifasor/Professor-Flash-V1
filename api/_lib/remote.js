@@ -82,6 +82,7 @@ async function readSSEStream(res, onDelta, firstTokenDeadlineMs = 300000) {
   const decoder = new TextDecoder();
   let buf = "";
   let full = "";
+  let reasoningAcc = "";
   let gotFirst = false;
   let firstAt = 0;
 
@@ -107,30 +108,53 @@ async function readSSEStream(res, onDelta, firstTokenDeadlineMs = 300000) {
       if (!t.startsWith("data:")) continue;
       const payload = t.slice(5).trim();
       if (payload === "[DONE]") {
-        if (!full.trim()) throw new Error("provider-empty");
         const tail = filter.flush();
         if (tail) { full += tail; onDelta(tail); }
+        // reasoning-only stream (content never arrived): use the reasoning
+        // tail as the answer instead of dying with provider-empty
+        if (!full.trim() && reasoningAcc.trim()) {
+          full = reasoningAcc;
+          onDelta(full);
+        }
+        if (!full.trim()) throw new Error("provider-empty");
         return full;
       }
       let d;
       try { d = JSON.parse(payload); } catch { continue; }
       if (d.error) throw new Error(String(d.error.message || "provider stream error").slice(0, 200));
       const delta = d.choices?.[0]?.delta;
+      // content first; reasoning/reasoning_content only as a keepalive when
+      // content never flows (some engines stream the answer inside reasoning)
       const piece =
         typeof delta?.content === "string" && delta.content
           ? delta.content
-          : typeof d.choices?.[0]?.text === "string"
+          : typeof d.choices?.[0]?.text === "string" && d.choices[0].text
             ? d.choices[0].text
             : null;
-      if (piece) {
+      const rPiece =
+        piece === null &&
+        ((typeof delta?.reasoning === "string" && delta.reasoning) ||
+         (typeof delta?.reasoning_content === "string" && delta.reasoning_content) ||
+         null);
+      if (piece || rPiece) {
         if (!gotFirst) { gotFirst = true; firstAt = Date.now(); }
-        const clean = filter.push(piece);
-        if (clean) { full += clean; onDelta(clean); }
+        if (piece) {
+          const clean = filter.push(piece);
+          if (clean) { full += clean; onDelta(clean); }
+        } else if (rPiece) {
+          reasoningAcc += rPiece;
+          onDelta(""); // keepalive: no visible text, keeps timers alive
+        }
       }
     }
   }
   const tail = filter.flush();
   if (tail) { full += tail; onDelta(tail); }
+  // reasoning-only stream: the tail is the answer
+  if (!full.trim() && reasoningAcc.trim()) {
+    full = reasoningAcc;
+    onDelta(full);
+  }
   if (!full.trim()) throw new Error("provider-empty");
   return full;
 }

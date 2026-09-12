@@ -21,8 +21,13 @@ import { searchWeb, searchContext, newsHeadlines, newsContext } from "./_lib/sea
 import { gatherLiveData } from "./_lib/tools.js";
 import { streamRemote } from "./_lib/remote.js";
 import { currentUser } from "./_lib/auth.js";
-import { listModels } from "./_lib/db.js";
+import { listModels, getAccount } from "./_lib/db.js";
 import { sseSend, sleep } from "./_lib/util.js";
+import {
+  syncFilesToSandbox, sandboxInventory, runProjectInSandbox,
+  readSandboxProject, sandboxContextBlock,
+} from "./_lib/e2b-agent.js";
+import { getE2BKey } from "./_lib/e2b.js";
 
 const MAX_HISTORY = 16;
 const MAX_MSG_CHARS = 12000;
@@ -327,6 +332,28 @@ export default async function handler(req, res) {
       const filesCtx = filesContextMessage(body.files);
       if (filesCtx) finalMessages.push({ role: "system", content: filesCtx });
 
+      // E2B context: when the user's cloud sandbox is connected, the model
+      // learns that its files EXECUTE there — no dead code, runbook only.
+      if (user) {
+        let e2bAcctKey = "";
+        try {
+          const acct = await getAccount(user.folder).catch(() => null);
+          e2bAcctKey = acct ? await getE2BKey(acct) : "";
+        } catch { /* not connected */ }
+        if (e2bAcctKey) {
+          finalMessages.push({
+            role: "system",
+            content:
+              "CLOUD RUNTIME: this project will be written to the user's E2B Linux " +
+              "sandbox and EXECUTED there (npm install / build / python). Every file " +
+              "must be complete and runnable as-is; package.json (if present) must " +
+              "have valid scripts; imports must resolve. If you need a build step, " +
+              "define it in package.json. The sandbox runs your code for real — " +
+              "syntax errors and dead imports will fail the build.",
+          });
+        }
+      }
+
       if (Array.isArray(body.errors) && body.errors.length) {
         finalMessages.push({
           role: "system",
@@ -384,9 +411,51 @@ export default async function handler(req, res) {
 
     // ---- Agent staged pipeline (autopilot: keeps going until complete) ----
     if (mode === "agent") {
+      // ---- E2B cloud runtime (user's own sandbox, if connected) ----
+      // When the user has saved an E2B API key, the whole build executes
+      // inside their cloud sandbox: files land on a real filesystem, the
+      // project actually runs there (npm/python), and runtime errors feed
+      // back into the repair passes. The Files tab reads the sandbox itself.
+      let e2bKey = "";
+      let sbx = null;
+      if (user) {
+        try {
+          const acct = await getAccount(user.folder).catch(() => null);
+          e2bKey = acct ? await getE2BKey(acct) : "";
+        } catch { /* not connected */ }
+      }
+      if (e2bKey) {
+        try {
+          status("Booting your E2B cloud sandbox…");
+          sbx = await getOrCreateSandbox(e2bKey, {
+            metadata: `user=${encodeURIComponent(user.folder)}&app=professor`,
+          });
+          status(sbx.reused ? "Reconnected to your cloud sandbox ✓" : "Cloud sandbox is up ✓");
+          sseSend(res, { type: "e2b", state: "connected" });
+        } catch (e) {
+          status(`E2B sandbox unavailable (${String(e.message || e).slice(0, 90)}) — building in the workbench instead.`);
+          sseSend(res, { type: "e2b", state: "failed", message: String(e.message || e).slice(0, 160) });
+          sbx = null;
+        }
+      }
+
+      /** Push a {type:"files"} event carrying the sandbox's real project. */
+      const deliverSandboxFiles = async () => {
+        if (!sbx) return null;
+        try {
+          const realFiles = await readSandboxProject(e2bKey, sbx);
+          if (realFiles.length) {
+            sseSend(res, { type: "files", files: realFiles });
+            return realFiles;
+          }
+        } catch { /* best-effort */ }
+        return null;
+      };
+
       let pass = 0;
       const maxPasses = 8;
       let selfTested = false;
+      let sandboxRun = null; // last run result (for the model's context)
 
       while (pass < maxPasses) {
         pass++;
@@ -398,6 +467,32 @@ export default async function handler(req, res) {
         const hasComplete = blocks.some((b) => !b.truncated);
         const bad = blocks.filter((b) => isEmptyFile(b) || b.truncated);
         const wantsContinue = /(^|\n)\s*CONTINUE:\s*$/i.test(result.text.trim());
+
+        // E2B: whenever complete file blocks exist, push them into the cloud
+        // sandbox and RUN the project there — real execution, real errors.
+        if (sbx && hasComplete && !bad.length) {
+          try {
+            status("Syncing files into your cloud sandbox…");
+            await syncFilesToSandbox(e2bKey, sbx, blocks.filter((b) => !b.truncated));
+            status("Running the project in the sandbox…");
+            sandboxRun = await runProjectInSandbox(e2bKey, sbx);
+            status(sandboxRun.hint);
+            if (sandboxRun.exitCode != null && sandboxRun.exitCode !== 0) {
+              // feed the failure into the repair pass below via `sandboxRun`
+              sseSend(res, {
+                type: "status",
+                text: "The project failed inside the sandbox — the agent is repairing it…",
+              });
+            } else {
+              await deliverSandboxFiles();
+            }
+          } catch (e) {
+            status(`Sandbox execution hiccup: ${String(e.message || e).slice(0, 90)}`);
+          }
+        }
+        const sandboxFailed =
+          sandboxRun && sandboxRun.exitCode != null && sandboxRun.exitCode !== 0 &&
+          (sandboxRun.stderr || sandboxRun.stdout || "").trim().length > 0;
 
         // A) analysis-only answer (no files yet) → orchestrate the build
         if (!hasComplete && !wantsContinue && pass === 1) {
@@ -454,10 +549,19 @@ export default async function handler(req, res) {
         }
 
         // C) empty/truncated files → repair pass
-        if (bad.length) {
+        //    (also entered when the SANDBOX run failed — the real stderr
+        //    goes to the model, which must re-emit fixed files)
+        if (bad.length || sandboxFailed) {
           const list = [...new Set(bad.map((b) => b.path))];
-          status("Repairing incomplete files…");
-          passStart("Repair");
+          status(bad.length ? "Repairing incomplete files…" : "Repairing the sandbox failure…");
+          passStart(bad.length ? "Repair" : "Cloud-repair");
+          const failureContext = sandboxFailed
+            ? "THE PROJECT FAILED WHEN EXECUTED IN THE REAL LINUX SANDBOX " +
+              `(exit=${sandboxRun.exitCode}).\nstderr tail:\n${(sandboxRun.stderr || "").slice(-1200)}\n` +
+              `stdout tail:\n${(sandboxRun.stdout || "").slice(-800)}\n` +
+              "Fix the root cause and re-emit ONLY the broken file(s) COMPLETELY as " +
+              "```file:<path> blocks."
+            : "";
           const fill = await generateAnswer({
             preferredModel: effPref,
             messages: [
@@ -466,10 +570,11 @@ export default async function handler(req, res) {
               {
                 role: "user",
                 content:
-                  "These files were emitted EMPTY or cut off: " +
-                  list.map((p) => `\`${p}\``).join(", ") +
-                  ". Re-emit each COMPLETELY — full working content, no truncation, " +
-                  "no placeholders. ONLY these files as ```file:<path> blocks.",
+                  failureContext ||
+                  ("These files were emitted EMPTY or cut off: " +
+                    list.map((p) => `\`${p}\``).join(", ") +
+                    ". Re-emit each COMPLETELY — full working content, no truncation, " +
+                    "no placeholders. ONLY these files as ```file:<path> blocks."),
               },
             ],
             mode,
@@ -477,8 +582,23 @@ export default async function handler(req, res) {
             onDelta: delta,
             onStatus: status,
           });
-          const fillBlocks = parseFileBlocks(fill.text);
-          const fillPaths = new Set(fillBlocks.filter((b) => !isEmptyFile(b)).map((b) => b.path));
+          // E2B: re-sync + re-run the repaired files immediately
+          if (sbx) {
+            try {
+              const fillBlocks = parseFileBlocks(fill.text).filter((b) => !isEmptyFile(b) && !b.truncated);
+              if (fillBlocks.length) {
+                status("Re-testing in the cloud sandbox…");
+                await syncFilesToSandbox(e2bKey, sbx, fillBlocks);
+                sandboxRun = await runProjectInSandbox(e2bKey, sbx);
+                status(sandboxRun.hint);
+                if (!(sandboxRun.exitCode != null && sandboxRun.exitCode !== 0)) {
+                  await deliverSandboxFiles();
+                }
+              }
+            } catch { /* keep the loop going even if sandbox re-test hiccups */ }
+          }
+          const fillBlocks2 = parseFileBlocks(fill.text);
+          const fillPaths = new Set(fillBlocks2.filter((b) => !isEmptyFile(b)).map((b) => b.path));
           let merged = result.text;
           for (const path of fillPaths) {
             merged = merged.replace(
@@ -544,6 +664,10 @@ export default async function handler(req, res) {
 
         break; // complete
       }
+
+      // E2B: final delivery — after the pipeline settles, ship the REAL
+      // sandbox directory (what actually ran in the cloud) to the client.
+      if (typeof deliverSandboxFiles === "function") await deliverSandboxFiles();
     }
 
     sseSend(res, {

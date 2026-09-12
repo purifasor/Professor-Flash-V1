@@ -182,6 +182,8 @@ async function* streamOpenAI({ prov, model, body, signal, firstTokenDeadlineMs, 
   let gotFirst = false;
   let firstAt = 0;
   let queuePings = 0;
+  let sawContent = false;
+  let reasoningBuf = "";
 
   for (;;) {
     // once tokens flow, keep reading until the stream ends (generation can
@@ -227,19 +229,47 @@ async function* streamOpenAI({ prov, model, body, signal, firstTokenDeadlineMs, 
         throw new Error("stream-error");
       }
       const delta = d.choices?.[0]?.delta;
-      const piece = delta?.content;
-      if (typeof piece === "string" && piece) {
+      // Some engines (Qwen3.8) stream a `reasoning` phase first, then the
+      // real answer in `content`. The reasoning phase is a PLACEHOLDER —
+      // only forward it as a (visually hidden) keepalive so the connection
+      // counts as alive; the moment `content` starts flowing, ONLY content
+      // is forwarded. If a model never sends content (reasoning-only
+      // endpoint), the reasoning tail becomes the answer as a last resort.
+      const piece = typeof delta?.content === "string" && delta.content
+        ? delta.content
+        : null;
+      const rPiece = typeof delta?.reasoning === "string" && delta.reasoning
+        ? delta.reasoning
+        : typeof delta?.reasoning_content === "string" && delta.reasoning_content
+          ? delta.reasoning_content
+          : null;
+      if (piece || rPiece) {
         if (!gotFirst) {
           gotFirst = true;
           firstAt = Date.now();
         }
-        const clean = filter.push(piece);
-        if (clean) yield clean;
+        if (piece) {
+          sawContent = true;
+          const clean = filter.push(piece);
+          if (clean) yield clean;
+        } else if (rPiece) {
+          reasoningBuf += rPiece;
+          // keepalive yield (empty string keeps the stream alive, sends no
+          // visible text) — only until real content arrives
+          if (!sawContent) yield "";
+        }
       }
     }
   }
   const tail = filter.flush();
   if (tail) yield tail;
+  // reasoning-only endpoint (content never arrived): the reasoning tail IS
+  // the answer — yield it through the preamble stripper so CoT junk is
+  // removed before the user sees it
+  if (!sawContent && reasoningBuf.trim()) {
+    const clean = stripReasoningPreamble(reasoningBuf);
+    if (clean) yield clean;
+  }
 }
 
 // Try ONE model streaming to completion. Returns { model, text } or throws.

@@ -154,7 +154,7 @@
 
         <footer class="composer-wrap">
           <div class="composer" id="composer">
-            <textarea id="input" rows="1" placeholder="Write your message… (Enter = send, Shift+Enter = new line)" aria-label="Message"></textarea>
+            <textarea id="input" rows="1" dir="auto" placeholder="Write your message… (Enter = send, Shift+Enter = new line)" aria-label="Message"></textarea>
             <button class="send-btn stop" id="btnStop" type="button" title="Stop" aria-label="Stop" hidden>
               <svg viewBox="0 0 24 24" width="15" height="15"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>
             </button>
@@ -176,6 +176,30 @@
 
       <!-- workbench (agent mode) -->
       <section class="bench" id="bench" hidden>
+        <!-- E2B cloud gate: agent mode is locked until the user connects
+             their own E2B sandbox API key -->
+        <div class="e2b-gate" id="e2bGate" hidden>
+          <div class="e2b-card">
+            <div class="e2b-logo"><img src="/assets/logo.png" alt="" width="46" height="46" draggable="false"></div>
+            <h3>Coding Agent runs in your cloud sandbox</h3>
+            <p class="e2b-text">
+              This agent builds and <b>executes</b> projects on
+              <a href="https://e2b.dev" target="_blank" rel="noopener">E2B</a> — secure cloud Linux sandboxes.<br>
+              Create a free account, copy your API key, and paste it below to unlock the agent.
+            </p>
+            <ol class="e2b-steps">
+              <li>Sign up at <a href="https://e2b.dev" target="_blank" rel="noopener">e2b.dev</a> (free)</li>
+              <li>Open <a href="https://console.e2b.dev/?tab=keys" target="_blank" rel="noopener">console.e2b.dev → API keys</a></li>
+              <li>Copy your key (starts with <code>e2b_</code>) and paste it here</li>
+            </ol>
+            <div class="e2b-form">
+              <input type="password" id="e2bKeyInput" placeholder="e2b_…" dir="ltr" autocomplete="off" spellcheck="false">
+              <button class="add-provider solid" id="e2bKeyBtn">Connect sandbox</button>
+            </div>
+            <div class="e2b-status" id="e2bStatus" hidden></div>
+            <button class="tool-btn" id="e2bKeyRefresh" title="I already saved a key — check again">Check saved key</button>
+          </div>
+        </div>
         <div class="bench-bar">
           <div class="bench-tabs">
             <button class="bench-tab active" data-tab="preview" id="tabPreview">

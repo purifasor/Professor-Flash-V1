@@ -8,6 +8,7 @@
     "api/history.js": { "maxDuration": 60 },
     "api/search.js": { "maxDuration": 60 },
     "api/bootstrap.js": { "maxDuration": 10 },
-    "api/models.js": { "maxDuration": 10, "includeFiles": "brain/models.json" }
+    "api/models.js": { "maxDuration": 10, "includeFiles": "brain/models.json" },
+    "api/e2b.js": { "maxDuration": 60 }
   }
 }

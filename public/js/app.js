@@ -385,7 +385,7 @@ window.PFApp = (() => {
       `<div class="msg-avatar">${avatar}</div>` +
       `<div class="msg-body">` +
       `<div class="msg-meta"><span class="msg-role">${role}</span>${modelChip}</div>` +
-      `<div class="msg-content md">${contentHtml}</div>${srcBox}` +
+      `<div class="msg-content md" dir="auto">${contentHtml}</div>${srcBox}` +
       `<div class="msg-actions">${copyBtn}</div></div>`;
     wireMsg(wrap);
     return wrap;
@@ -583,9 +583,102 @@ window.PFApp = (() => {
     $("modelPickerBar").classList.toggle("open", open);
   }
 
+  /* ============================ E2B cloud sandbox gate ============================ */
+  // The Coding Agent executes projects in the user's own E2B cloud sandbox.
+  // Until a verified key is saved, agent mode shows the gate; chat keeps
+  // working, but the agent bench stays locked.
+  let e2bConnected = false;
+
+  function e2bSetGate(on) {
+    $("e2bGate").hidden = !on;
+    const bar = $("benchBar");
+    if (bar) bar.style.display = on ? "none" : "";
+    const body = document.querySelector("#bench .bench-body");
+    if (body) body.style.display = on ? "none" : "";
+  }
+
+  async function e2bCheck() {
+    try {
+      const r = await fetch("/api/e2b");
+      if (!r.ok) { e2bConnected = false; return false; }
+      const d = await r.json();
+      e2bConnected = !!d.connected;
+      e2bSetGate(!e2bConnected);
+      return e2bConnected;
+    } catch {
+      e2bConnected = false;
+      return false;
+    }
+  }
+
+  function e2bWire() {
+    const btn = $("e2bKeyBtn");
+    const input = $("e2bKeyInput");
+    const st = $("e2bStatus");
+    const doSave = async () => {
+      const key = (input.value || "").trim();
+      if (!key) {
+        st.hidden = false; st.className = "e2b-status err";
+        st.textContent = "Paste your E2B API key first.";
+        return;
+      }
+      btn.disabled = true;
+      st.hidden = false; st.className = "e2b-status";
+      st.textContent = "Verifying with E2B…";
+      try {
+        const r = await fetch("/api/e2b", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "save", apiKey: key }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          e2bConnected = true;
+          st.className = "e2b-status ok";
+          st.textContent = "Connected ✓ " + (d.detail || "") + (d.masked ? " — " + d.masked : "");
+          input.value = "";
+          setTimeout(() => e2bSetGate(false), 900);
+        } else {
+          st.className = "e2b-status err";
+          st.textContent = d.detail || "That key did not work.";
+        }
+      } catch {
+        st.className = "e2b-status err";
+        st.textContent = "Network error — try again.";
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    btn.addEventListener("click", doSave);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") doSave(); });
+    $("e2bKeyRefresh").addEventListener("click", () => {
+      st.hidden = true;
+      e2bCheck();
+    });
+  }
+
   /* ============================ mode ============================ */
   function setMode(next, { soft = false } = {}) {
-    mode = next === "agent" ? "agent" : "chat";
+    const wantAgent = next === "agent";
+    // E2B gate: the Coding Agent needs the user's cloud sandbox — without a
+    // verified key the gate opens instead of the bench (never a dead build)
+    if (wantAgent && !soft && !e2bConnected) {
+      mode = "agent";
+      $("app").dataset.mode = "agent";
+      $("modeSwitch").dataset.active = "agent";
+      $("btnModeChat").classList.remove("active");
+      $("btnModeAgent").classList.add("active");
+      $("btnModeChat").setAttribute("aria-selected", "false");
+      $("btnModeAgent").setAttribute("aria-selected", "true");
+      $("bench").hidden = false;
+      $("benchFab").hidden = false;
+      e2bSetGate(true);
+      $("input").placeholder = "Connect your E2B cloud sandbox to unlock the Coding Agent…";
+      const s = current();
+      if (s) { s.mode = "chat"; saveSessions(); renderSessionList(); }
+      return;
+    }
+    mode = wantAgent ? "agent" : "chat";
     $("app").dataset.mode = mode;
     $("modeSwitch").dataset.active = mode;
     $("btnModeChat").classList.toggle("active", mode === "chat");
@@ -594,6 +687,7 @@ window.PFApp = (() => {
     $("btnModeAgent").setAttribute("aria-selected", String(mode === "agent"));
     $("bench").hidden = mode !== "agent";
     $("benchFab").hidden = mode !== "agent";
+    if (mode === "agent") e2bSetGate(!e2bConnected);
     $("input").placeholder = mode === "agent"
       ? "Describe the app you want… (e.g. build a 3D first-person shooter with a neon-red dark theme)"
       : "Write your message… (Enter = send, Shift+Enter = new line)";
@@ -638,6 +732,12 @@ window.PFApp = (() => {
     const resumeCtx = resumeOf || { attempt: 0, raw: "", aiMsg: null, msgEl: null };
     text = String(text || "").trim();
     if (!text || (streaming && !resumeOf)) return;
+    // E2B gate: agent builds require the user's cloud sandbox key
+    if (mode === "agent" && !e2bConnected) {
+      toast("Connect your E2B cloud sandbox first — the gate is on the right.");
+      PFAgent.openMobile();
+      return;
+    }
     const s = ensureSession();
     userStopped = false;
     startStallWatchdog();
@@ -822,6 +922,19 @@ window.PFApp = (() => {
             if (mode === "agent") beginPass(d.label);
             continue;
           }
+          // E2B: the sandbox's REAL project directory (files that actually
+          // ran in the cloud) — replaces the workbench content
+          if (d.type === "files") {
+            touchStream();
+            if (Array.isArray(d.files) && d.files.length) {
+              PFAgent.setFiles(d.files.map((f) => ({ path: f.path, content: f.content })));
+              const sNow2 = current();
+              if (sNow2 && mode === "agent") sNow2.files = d.files.map((f) => ({ path: f.path, content: f.content }));
+              saveSessions();
+              toast("Files delivered from your cloud sandbox ⬇");
+            }
+            continue;
+          }
           if (d.type === "status") {
             touchStream();
             const line = statusEl2 || statusEl;
@@ -994,9 +1107,9 @@ window.PFApp = (() => {
       `<div class="msg-avatar"></div>` +
       `<div class="msg-body">` +
       `<div class="msg-meta"><span class="msg-role">Professor</span></div>` +
-      `<div class="status-line" hidden><span class="status-dot"></span><span>…</span></div>` +
+      `<div class="status-line"><span class="status-dot"></span><span>Thinking…</span></div>` +
       `<div class="typing"><span></span><span></span><span></span></div>` +
-      `<div class="msg-content md"></div></div>`;
+      `<div class="msg-content md" dir="auto"></div></div>`;
     return wrap;
   }
 
@@ -1104,6 +1217,8 @@ window.PFApp = (() => {
     $("btnStop").addEventListener("click", stop);
 
     wireAgent();
+    e2bWire();
+    e2bCheck();
 
     if (isMobile()) {
       $("app").dataset.side = "closed";
@@ -1132,6 +1247,7 @@ window.PFApp = (() => {
       const wasPublic = lsPrefix === "public";
       const prevCurrentId = currentId;
       setAccountKey(u?.email || u?.username || "public");
+      e2bCheck(); // refresh the cloud-sandbox gate for THIS account
       renderMessages();
       renderSessionList();
       renderModelPicker();
