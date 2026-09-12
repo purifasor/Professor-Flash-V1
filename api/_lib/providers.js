@@ -1,7 +1,8 @@
 // Provider chain for Professor AI (default engine).
-// Roster v3 — priority chain read live from brain/models.json:
-//   1) OVH Qwen3.5-397B-A17B (default) 2) Kilo Nemotron-3-Ultra-550B
-//   3) Kilo InclusionAI Ling-3.0 → emergency relay.
+// Roster v5 — live-tested 2026-09-12, read from brain/models.json:
+//   1) OVH Qwen3.8-27B (default chat) 2) Unturf Qwen3.6 Coder
+//   3) Kilo Nemotron-3-Ultra-550B (default agent) → Kilo Nemotron-3-Super
+//   → Kilo Nemotron-3.5-Lightning → pollinations Llama relay.
 //
 // Engine hardening for slow/queued providers (Nemotron-Ultra can queue for
 // minutes behind "KILO PROCESSING" SSE comments):
@@ -43,23 +44,42 @@ const FALLBACK_ROSTER = {
   providers: [
     {
       id: "ovh",
-      label: "Professor Core",
+      label: "Qwen 3.8 27B",
       url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       type: "openai",
-      chat: ["Qwen3.5-397B-A17B"],
-      agent: ["Qwen3.5-397B-A17B"],
+      reasoningOff: false,
+      chat: ["Qwen3.8-27B", "Qwen3.5-397B-A17B"],
+      agent: ["Qwen3.8-27B", "Qwen3.5-397B-A17B"],
+    },
+    {
+      id: "unturf",
+      label: "Qwen 3.6 Coder",
+      url: "https://hermes.ai.unturf.com/v1/chat/completions",
+      type: "openai",
+      reasoningOff: false,
+      chat: ["Lorbus/Qwen3.6-27B-int4-AutoRound"],
+      agent: ["Lorbus/Qwen3.6-27B-int4-AutoRound"],
     },
     {
       id: "kilo",
-      label: "Professor Prime",
+      label: "Nemotron / Lightning",
       url: "https://api.kilo.ai/api/gateway/chat/completions",
       type: "openai",
-      chat: ["nvidia/nemotron-3-ultra-550b-a55b:free", "inclusionai/ling-3.0-flash-sante:free"],
-      agent: ["nvidia/nemotron-3-ultra-550b-a55b:free", "inclusionai/ling-3.0-flash-sante:free"],
+      reasoningOff: false,
+      chat: [
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3.5-lightning:free",
+      ],
+      agent: [
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3.5-lightning:free",
+      ],
     },
     {
       id: "pollinations",
-      label: "Professor Relay",
+      label: "Llama 3.3 70B Relay",
       url: "https://text.pollinations.ai/openai",
       type: "openai",
       reasoningOff: false,
@@ -381,6 +401,38 @@ function shortModel(id) {
   return String(id).split("/").pop().replace(/:free$/, "");
 }
 
+// Some free gateways (Qwen3.6 int4, Nemotron Lightning) dump their working
+// notes as PLAIN text before the answer ("Here's a thinking process:", "We
+// need to answer…", "The user wants…"). Strip that preamble on final render
+// so the user only ever sees the actual answer.
+function stripReasoningPreamble(text) {
+  let out = String(text || "");
+  for (let i = 0; i < 3; i++) {
+    const trimmed = out;
+    // case 1: classic meta-preamble header ("Here's a thinking process:")
+    let m = /^\s*(here'?s (?:a |the )?(?:thinking|reasoning) process|let'?s think about this|we need to answer|i need to (?:answer|respond|determine)|let me (?:think|analy[sz]e)|first,? i(?:'|’)?ll)\b/i.exec(trimmed);
+    // case 2: "The user wants/asked/said …" meta commentary (no header)
+    if (!m) m = /^\s*the user (?:wants|asked|said|is asking|wrote|requested|needs|expects)\b/i.exec(trimmed);
+    if (!m) break;
+    const paras = trimmed.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+    if (paras.length < 2) break; // nothing to strip after the meta part
+    // drop leading paragraphs while they are meta commentary; everything
+    // after the LAST meta paragraph is the answer
+    const META = /^(here'?s (?:a |the )?(?:thinking|reasoning) process|let'?s think|we need to answer|i need to (?:answer|respond|determine)|let me (?:think|analy[sz]e)|first,? i(?:'|’)?ll|the user (?:wants|asked|said|is asking|wrote|requested|needs|expects)|step \d|analy[sz]e|plan:|decide)\b/i;
+    let first = 0;
+    while (first < paras.length - 1 && (META.test(paras[first]) || /^(okay|alright)[,.]?\s/i.test(paras[first]) === (first === 0 ? true : false) && /^(okay|alright)[,.]?\s/i.test(paras[first]))) first++;
+    // keep at least the final paragraph
+    const keep = Math.max(first, paras.length - 2 >= first ? paras.length - 2 : first);
+    const candidate = paras.slice(first).join("\n\n");
+    if (candidate.trim().length < 4) break; // heuristic ate everything — bail
+    if (candidate === out.trim()) break;
+    out = candidate;
+  }
+  return out.trim();
+}
+
+export { stripReasoningPreamble };
+
 function* splitChunks(text, size = 28) {
   for (let i = 0; i < text.length; i += size) yield text.slice(i, i + size);
 }
@@ -436,13 +488,58 @@ export async function generateAnswer({
       return { prov, models: [...pinned, ...rest], pinned: pinned.length > 0 };
     })
     .filter((p) => p.models.length)
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned)); // pinned provider first
+    // ALL providers that carry the pinned model go first (a pinned model may
+    // exist on more than one provider), then everyone else as fallback
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
-  // ---- RACE MODE: start streams to every candidate model in parallel;
-  // the FIRST one to deliver a real token wins, all others are aborted.
-  // This kills the "queued for 4 minutes while a free model sat idle"
-  // failure mode — the user gets the fastest engine that's actually up.
-  // (Sequential chain stays as the fallback when every racer stalls.)
+  // ---- PINNED-EXCLUSIVE: when the user picked a specific engine, run a
+  // SHORT race among just that engine's candidates first (models on the same
+  // endpoint share a rate window, so racing siblings is safe) and only fall
+  // back to the full roster when the pick genuinely cannot answer. This is
+  // what makes "user chose Qwen" actually mean "Qwen answers".
+  if (wanted) {
+    const pinnedProviders = providersOrdered.filter((p) => p.pinned);
+    if (pinnedProviders.length) {
+      onStatus(`Connecting to your model (${shortModel(providersOrdered[0].models[0])})…`);
+      const pinnedRace = await raceFirstToken({
+        providersOrdered: pinnedProviders,
+        body,
+        firstDeadline,
+        signal,
+        onDelta,
+        onStatus,
+        errors,
+      });
+      if (pinnedRace) return pinnedRace;
+      // pinned engine raced out — one sequential try on the pinned model
+      // (long queue window) before touching the fallback roster
+      for (const { prov, models } of pinnedProviders) {
+        for (const m of models.slice(0, 1)) {
+          try {
+            const win = await tryStreaming(prov, m, body, {
+              firstTokenDeadlineMs: firstDeadline,
+              signal,
+              onDelta,
+              onStatus,
+            });
+            if (win && win.text.trim()) {
+              return { ...win, providerLabel: prov.label, model: win.model, partial: !!win.partial };
+            }
+          } catch (e) {
+            errors.push(`pinned ${prov.id}/${m}: ${e.message}`);
+          }
+        }
+      }
+      onStatus("Your model is busy — switching to the best available engine…");
+    }
+  }
+
+  // ---- RACE MODE (auto / no pick): start streams to the default candidate
+  // models in parallel; the FIRST one to deliver a real token wins, all
+  // others are aborted. This kills the "queued for 4 minutes while a free
+  // model sat idle" failure mode — the user gets the fastest engine that's
+  // actually up. (Sequential chain stays as the fallback when every racer
+  // stalls.) A user-pinned engine never enters this branch (handled above).
   const raced = await raceFirstToken({
     providersOrdered,
     body,

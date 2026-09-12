@@ -15,7 +15,7 @@
 // was removed by design): each chat turn quietly checks whether fresh web
 // context helps and injects it when found. MAX thinking is the only mode.
 
-import { generateAnswer, getRoster } from "./_lib/providers.js";
+import { generateAnswer, getRoster, stripReasoningPreamble } from "./_lib/providers.js";
 import { chatSystemPrompt, agentSystemPrompt, filesContextMessage } from "./_lib/brain.js";
 import { searchWeb, searchContext, newsHeadlines, newsContext } from "./_lib/search.js";
 import { gatherLiveData } from "./_lib/tools.js";
@@ -132,6 +132,10 @@ export default async function handler(req, res) {
 
   const status = (text) => sseSend(res, { type: "status", text });
   const delta = (text) => sseSend(res, { type: "delta", text });
+  // a NEW chat bubble per agent pipeline pass — keeps the feed ordered:
+  // each pass (analysis → build → continue → repair) lands as its own
+  // message under the user's prompt instead of one giant blob
+  const passStart = (label) => sseSend(res, { type: "pass", label: label || "" });
 
   try {
     const lastUser = messages[messages.length - 1].content;
@@ -231,7 +235,7 @@ export default async function handler(req, res) {
             const wantsContinue = /(^|\n)\s*CONTINUE:\s*$/i.test(text.trim());
             if (!bad.length && !wantsContinue) break;
             status(wantsContinue ? "Continuing the build…" : "Completing files…");
-            delta("\n\n---\n\n");
+            passStart(wantsContinue ? "Continue" : "Repair");
             let repair = "";
             await streamWithRetry(
               {
@@ -357,6 +361,21 @@ export default async function handler(req, res) {
       preferredModel: effPref,
     });
 
+    // CHAT only: some free engines preface the answer with their working
+    // notes as plain text. After the stream completes, one clean re-render of
+    // the final answer removes that preamble (the raw stream already showed
+    // to the user stays untouched — this only affects what lands in history
+    // files). Agent output NEVER passes through (it carries ```file: blocks).
+    if (mode === "chat" && result?.text && !/```/.test(result.text)) {
+      const cleaned = stripReasoningPreamble(result.text);
+      if (cleaned && cleaned !== result.text) {
+        result.text = cleaned;
+        // repaint the final bubble with the clean answer (client replaces
+        // the bubble content on this event)
+        sseSend(res, { type: "replace", text: cleaned });
+      }
+    }
+
     // ---- Agent staged pipeline (autopilot: keeps going until complete) ----
     if (mode === "agent") {
       let pass = 0;
@@ -377,6 +396,7 @@ export default async function handler(req, res) {
         // A) analysis-only answer (no files yet) → orchestrate the build
         if (!hasComplete && !wantsContinue && pass === 1) {
           status("Planning build — dispatching sub-agents…");
+          passStart("Build");
           const buildMsgs = [
             ...finalMessages,
             { role: "assistant", content: result.text },
@@ -388,7 +408,6 @@ export default async function handler(req, res) {
                 "index.html, every file complete, zero dead UI). Finish with SUMMARY:.",
             },
           ];
-          delta("\n\n---\n\n");
           result = await generateAnswer({
             messages: buildMsgs,
             mode,
@@ -403,6 +422,7 @@ export default async function handler(req, res) {
         // B) token-budget stop → resume exactly where it stopped
         if (wantsContinue) {
           status("Continuing the build…");
+          passStart("Continue");
           const lastBlock = blocks[blocks.length - 1];
           const cont = await generateAnswer({
             preferredModel: effPref,
@@ -431,6 +451,7 @@ export default async function handler(req, res) {
         if (bad.length) {
           const list = [...new Set(bad.map((b) => b.path))];
           status("Repairing incomplete files…");
+          passStart("Repair");
           const fill = await generateAnswer({
             preferredModel: effPref,
             messages: [
@@ -471,6 +492,7 @@ export default async function handler(req, res) {
         if (!selfTested) {
           selfTested = true;
           status("Self-testing the build…");
+          passStart("Self-test");
           const review = await generateAnswer({
             preferredModel: effPref,
             messages: [

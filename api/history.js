@@ -43,6 +43,8 @@ export default async function handler(req, res) {
   }
   try {
     await saveChat(user.folder, {
+      // stable per-conversation key → one file per chat (updates in place)
+      key: typeof body.key === "string" ? body.key.slice(0, 60) : "",
       title: String(body.title).slice(0, 120),
       mode: body.mode === "agent" ? "agent" : "chat",
       model: String(body.model || "default").slice(0, 80),

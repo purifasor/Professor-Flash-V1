@@ -425,11 +425,13 @@ window.PFApp = (() => {
   }
 
   // Model chip labels. Custom providers keep the name the user chose.
-  // Built-in engine models are abbreviated so casual users don't mistake
-  // them for third-party services: Qwen → Q, NVIDIA → N, Ling → L.
+  // Built-in engines show their roster label — readable, honest names.
   function shortModel(id) {
-    const s = String(id || "").toLowerCase();
-    if (!s) return "";
+    const raw = String(id || "");
+    if (!raw) return "";
+    // "providerLabel · modelId" form from the done event → keep the model part
+    const modelId = raw.includes("·") ? raw.split("·").pop().trim() : raw;
+    const s = modelId.toLowerCase();
     const isCustom = providers.some((p) => {
       const nm = String(p.name || "").toLowerCase();
       const mid = String(p.modelId || "").toLowerCase();
@@ -441,14 +443,16 @@ window.PFApp = (() => {
         const mid = String(x.modelId || "").toLowerCase();
         return s.includes(nm) || s.includes(mid) || nm.includes(s);
       });
-      return (p && (p.name || p.modelId)) || String(id).split("/").pop();
+      return (p && (p.name || p.modelId)) || modelId.split("/").pop();
     }
-    if (s.includes("qwen")) return "Q";
-    if (s.includes("nemotron") || s.includes("nvidia")) return "N";
-    if (s.includes("ling") || s.includes("inclusion")) return "L";
-    // default engine with no model detail
-    if (s.includes("professor") || !s.includes("/")) return s.includes("professor") ? "Professor" : String(id).split("/").pop();
-    return String(id).split("/").pop().replace(/:free$/, "");
+    if (s.includes("qwen3.8")) return "Qwen 3.8";
+    if (s.includes("qwen3.5-397b")) return "Qwen 3.5 397B";
+    if (s.includes("qwen3.6")) return "Qwen 3.6 Coder";
+    if (s.includes("nemotron-3-ultra")) return "Nemotron-3-Ultra 550B";
+    if (s.includes("nemotron-3-super")) return "Nemotron-3-Super 120B";
+    if (s.includes("nemotron-3.5-lightning")) return "Nemotron-3.5 Lightning";
+    if (s.includes("openai-fast") || s.includes("gpt-oss")) return "Llama 3.3 70B";
+    return modelId.split("/").pop().replace(/:free$/, "");
   }
 
   function dropHero() {
@@ -459,16 +463,15 @@ window.PFApp = (() => {
   /* ============================ model picker (below composer, upward dropdown) ============================ */
   // Built-in ENGINE list — mirrors brain/models.json "options". Each entry
   // routes to a live-tested free endpoint; "engine:<id>" travels in the
-  // provider field and the server resolves the exact model.
+  // provider field and the server pins that exact model first.
   const ENGINES = [
     { id: "auto", label: "Auto — best available" },
-    { id: "qwen-max", label: "Qwen 3.5 397B" },
+    { id: "qwen", label: "Qwen 3.8" },
     { id: "qwen-coder", label: "Qwen 3.6 Coder" },
     { id: "nemotron-ultra", label: "Nemotron-3-Ultra 550B" },
     { id: "nemotron-super", label: "Nemotron-3-Super 120B" },
-    { id: "ling", label: "Ling 3.0 Flash" },
-    { id: "step", label: "Step 3.7 Flash" },
-    { id: "gpt-oss", label: "GPT-OSS Relay" },
+    { id: "nemotron-lightning", label: "Nemotron-3.5 Lightning" },
+    { id: "llama", label: "Llama 3.3 70B" },
   ];
   const engineLabel = (id) => (ENGINES.find((e) => e.id === id) || {}).label || id;
 
@@ -516,6 +519,9 @@ window.PFApp = (() => {
     const locked = s && s.messages && s.messages.length > 0;
     const chosen = chosenProvider();
 
+    // Auto maps to "" (default engine). When the session picked Auto but a
+    // stale engineModel pin exists from an earlier turn, clear it so the
+    // default engine really serves the next message.
     const mk = (label, value, kind) => {
       const b = document.createElement("button");
       b.className = "mp-option" + ((value || "") === chosen ? " active" : "") + (kind === "custom" ? " custom" : "");
@@ -530,7 +536,10 @@ window.PFApp = (() => {
         if (locked) return;
         const sess = ensureSession();
         sess.provider = value || "";
-        saveLastModel(value || ""); // remember for the next new chat
+        // "Auto" resets BOTH the conversation pick and the remembered default
+        // (no stale engineModel pin re-routing the next turn)
+        saveLastModel(value || "");
+        if (!value) sess.engineModel = "";
         saveSessions();
         setMpOpen(false);
         renderModelPicker();
@@ -642,7 +651,6 @@ window.PFApp = (() => {
       $("messages").appendChild(msgEl);
     }
     const hud = mode === "agent" ? makeHud(msgEl.querySelector(".msg-body")) : null;
-    saveSessions();
     renderSessionList();
     scrollBottom(true);
 
@@ -654,7 +662,7 @@ window.PFApp = (() => {
     abortCtrl = new AbortController();
 
     const statusEl = msgEl.querySelector(".status-line");
-    const contentEl = msgEl.querySelector(".msg-content");
+    let contentEl = msgEl.querySelector(".msg-content");
     const typingEl = msgEl.querySelector(".typing");
     let raw = resumeCtx.raw || "";
     let gotFirst = !!resumeCtx.raw;
@@ -662,6 +670,30 @@ window.PFApp = (() => {
     let renderTimer = null;
     let ingestTimer = null;
     let currentFile = null;
+
+    // AGENT PIPELINE PASSES: the server emits {type:"pass"} between build
+    // stages. Each pass becomes its OWN bubble — new messages stack BELOW
+    // the user's prompt in order, so a pass-2 answer never rewrites or
+    // floats above the user message. All passes accumulate into the same
+    // session record (aiMsg.content), keeping one history entry per turn.
+    const beginPass = (label) => {
+      // close out the previous bubble cleanly
+      clearTimeout(renderTimer);
+      if (contentEl && raw) contentEl.innerHTML = renderContent(raw, mode);
+      // new bubble element under the same message record
+      const wrap = buildStreamingMsg();
+      if (label) {
+        const meta = wrap.querySelector(".msg-meta");
+        if (meta) meta.insertAdjacentHTML("beforeend", `<span class="model-chip pass-chip">${PFMD.esc(label)}</span>`);
+      }
+      msgEl.parentNode.insertBefore(wrap, msgEl.nextSibling);
+      passEls.push(wrap);
+      contentEl = wrap.querySelector(".msg-content");
+      statusEl2 = wrap.querySelector(".status-line");
+      scrollBottom(true);
+    };
+    let statusEl2 = null; // status line of the CURRENT pass bubble
+    const passEls = [];
 
     if (resumeOf) {
       // resuming a dropped stream — show the reconnect state
@@ -766,18 +798,25 @@ window.PFApp = (() => {
           try { d = JSON.parse(line.slice(5).trim()); } catch { continue; }
 
           if (d.type === "ping") { touchStream(); continue; }
+          if (d.type === "pass") {
+            touchStream();
+            if (mode === "agent") beginPass(d.label);
+            continue;
+          }
           if (d.type === "status") {
             touchStream();
+            const line = statusEl2 || statusEl;
             if (hud && !gotFirst) hud.set(d.text);
             if (!gotFirst) {
-              statusEl.hidden = false;
-              statusEl.querySelector("span:last-child").textContent = d.text;
+              line.hidden = false;
+              line.querySelector("span:last-child").textContent = d.text;
             }
           } else if (d.type === "delta") {
             touchStream();
             if (!gotFirst) {
               gotFirst = true;
-              statusEl.hidden = true;
+              const line = statusEl2 || statusEl;
+              line.hidden = true;
               typingEl.hidden = true;
               if (hud) hud.coding();
             }
@@ -785,6 +824,17 @@ window.PFApp = (() => {
             scheduleRender();
             scheduleIngest();
             trackHud();
+          } else if (d.type === "replace") {
+            // server cleaned the final answer (reasoning preamble removed) —
+            // repaint the current bubble with the polished text
+            touchStream();
+            if (d.text) {
+              raw = d.text;
+              aiMsg.content = raw;
+              contentEl.innerHTML = renderContent(raw, mode);
+              wireMsg(msgEl);
+              scrollBottom();
+            }
           } else if (d.type === "done") {
             gotDone = true;
             aiMsg.model = d.model ? `${d.provider || ""} · ${d.model}` : null;
@@ -811,7 +861,10 @@ window.PFApp = (() => {
     clearTimeout(ingestTimer);
     stopStallWatchdog();
     statusEl.hidden = true;
+    if (statusEl2) statusEl2.hidden = true;
     typingEl.hidden = true;
+    // final paint of every pass bubble (agent multi-pass turns)
+    if (raw) contentEl.innerHTML = renderContent(raw, mode);
 
     // ---- AUTO-RESUME: the stream dropped mid-answer (no done event).
     // If the user did NOT press stop, we still have budget, AND the dropped
@@ -858,6 +911,7 @@ window.PFApp = (() => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          key: sNow?.id || "", // stable per-chat file on the server
           title: sNow?.title || "Conversation",
           mode,
           model: sNow?.provider || "default",
@@ -1070,16 +1124,16 @@ window.PFApp = (() => {
       // RESTORE: if this browser has no local sessions for the account
       // (fresh login, new device, sign-out/sign-in), pull the saved
       // conversations from the private DB so the history is never lost.
-      // The guard tolerates the ONE empty auto-created session that init()
-      // may have spawned while the fetch was in flight — it is replaced by
-      // the server history instead of blocking the restore (this race was
-      // exactly why history looked wiped after re-login).
+      // Chats are keyed by their server file suffix (the client-sent chat
+      // key), so restored chats keep a STABLE id — refreshing later merges
+      // instead of duplicating. The guard tolerates the ONE empty
+      // auto-created session that init() may have spawned while the fetch
+      // was in flight.
       fetch("/api/history")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           const onlyEmptyAuto =
             sessions.length === 1 &&
-            sessions[0].id.startsWith("s") &&
             !(sessions[0].messages || []).length;
           const canRestore =
             d && Array.isArray(d.chats) && d.chats.length &&
@@ -1087,8 +1141,12 @@ window.PFApp = (() => {
           if (!canRestore) return;
           const imported = [];
           for (const c of d.chats) {
+            // stable id from the server file suffix (the chat key we sent
+            // when saving); fall back to a path hash for legacy files
+            const keyMatch = /-([a-z0-9]{6,42})\.txt$/i.exec(c.path || "");
+            const key = keyMatch ? keyMatch[1] : c.path.replace(/[^a-z0-9]/gi, "").slice(-40);
             imported.push({
-              id: "srv-" + c.path.replace(/[^a-z0-9]/gi, "").slice(-40),
+              id: "srv-" + key,
               title: c.title || "Conversation",
               mode: c.mode === "agent" ? "agent" : "chat",
               provider: c.model && c.model !== "default" ? c.model : "",
@@ -1113,6 +1171,7 @@ window.PFApp = (() => {
           const s2 = current();
           if (s2) {
             setMode(s2.mode || "chat", { soft: true });
+            PFAgent.setFiles(s2.files || []);
             PFAgent.reset();
           }
         })

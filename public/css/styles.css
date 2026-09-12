@@ -603,7 +603,7 @@ img { display: block; max-width: 100%; }
   min-height: 3.8em; /* two lines — keeps the layout stable while tips rotate */
   max-width: 640px; margin-inline: auto;
 }
-.hero-sub::after { content: "▌"; color: var(--red-hot); animation: caretBlink 2.4s steps(1) infinite; }
+.hero-sub::after { content: "▌"; color: var(--red-hot); animation: caretBlink 4s steps(1) infinite; }
 @keyframes caretBlink { 50% { opacity: 0; } }
 
 /* ===================== messages ===================== */
@@ -787,7 +787,7 @@ img { display: block; max-width: 100%; }
   border: 2px solid var(--border-red);
   border-top-color: var(--red);
   border-radius: 50%;
-  animation: hudSpin 2s linear infinite;
+  animation: hudSpin 3.2s linear infinite;
 }
 @keyframes hudSpin { to { transform: rotate(360deg); } }
 .hud-files { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -834,7 +834,7 @@ img { display: block; max-width: 100%; }
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--red);
   box-shadow: 0 0 8px var(--red-glow);
-  animation: dotBreath 3s ease-in-out infinite;
+  animation: dotBreath 5s ease-in-out infinite;
 }
 @keyframes dotBreath { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 
@@ -843,7 +843,7 @@ img { display: block; max-width: 100%; }
 .typing span {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--red-hot);
-  animation: breathe 4.5s ease-in-out infinite;
+  animation: breathe 7s ease-in-out infinite;
 }
 .typing span:nth-child(2) { animation-delay: 0.4s; }
 .typing span:nth-child(3) { animation-delay: 0.8s; }
@@ -1200,7 +1200,7 @@ img { display: block; max-width: 100%; }
   border: 3px solid var(--border-red-soft);
   border-top-color: var(--red);
   border-radius: 50%;
-  animation: spin 2.4s linear infinite;
+  animation: spin 4.2s linear infinite;
 }
 .pco-title { font-size: 14px; font-weight: 800; color: var(--text); }
 .pco-file {
@@ -1231,7 +1231,7 @@ img { display: block; max-width: 100%; }
   max-width: 420px;
   margin-inline: auto;
 }
-.pe-tip::after { content: "▌"; color: var(--red-hot); animation: caretBlink 2.4s steps(1) infinite; }
+.pe-tip::after { content: "▌"; color: var(--red-hot); animation: caretBlink 4s steps(1) infinite; }
 
 .preview-status {
   flex: 0 0 auto;
@@ -1651,7 +1651,7 @@ img { display: block; max-width: 100%; }
   border-radius: 50%;
   vertical-align: -2px;
   margin-right: 7px;
-  animation: spin 2.4s linear infinite;
+  animation: spin 4.2s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 

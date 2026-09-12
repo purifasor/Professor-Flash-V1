@@ -300,8 +300,11 @@ export async function writeUserInfo(folder, { username, email, password, provide
 
 // ------------------------------------------------------------------- chats
 /**
- * Save a conversation transcript. Readable format: separate labeled blocks for
- * user messages and assistant answers, code fenced in its own containers.
+ * Save a conversation transcript. Stable identity: one file per chat —
+ * the filename derives from a chat key (client-supplied, unique per
+ * conversation) so continued conversations UPDATE their file instead of
+ * fragmenting into one file per turn (that fragmentation made the sidebar
+ * show dozens of duplicates after re-login).
  */
 export async function saveChat(folder, chat) {
   if (!chat || !Array.isArray(chat.messages) || !chat.messages.length) return;
@@ -315,8 +318,24 @@ export async function saveChat(folder, chat) {
     `_${pad(d.getUTCHours())}-${pad(d.getUTCMinutes())}`;
   const slug = slugify(chat.title || "conversation");
   const dir = `${folder}/Chats`;
-  // filename carries date + time + conversation title (unique per chat)
-  const path = `${dir}/${stamp}-${slug}.txt`;
+  // stable chat key → same file every turn; falls back to stamp+title for
+  // legacy clients that send no key
+  const key = String(chat.key || "")
+    .replace(/[^a-z0-9-]/gi, "")
+    .slice(-42);
+  const path = key
+    ? `${dir}/${stamp}-${slug}-${key || Date.now().toString(36)}.txt`
+    : `${dir}/${stamp}-${slug}-${Date.now().toString(36)}.txt`;
+  // with a key, always resolve to the SAME existing file (the stamp differs
+  // across turns): list the folder once and match the key suffix
+  let finalPath = path;
+  if (key) {
+    const entries = await listDir(dir).catch(() => []);
+    const existing = entries.find(
+      (e) => e.type === "file" && e.name.endsWith(`-${key}.txt`)
+    );
+    if (existing) finalPath = existing.path;
+  }
 
   const parts = [
     "========================================",
