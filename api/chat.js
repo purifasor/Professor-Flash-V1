@@ -15,7 +15,7 @@
 // was removed by design): each chat turn quietly checks whether fresh web
 // context helps and injects it when found. MAX thinking is the only mode.
 
-import { generateAnswer } from "./_lib/providers.js";
+import { generateAnswer, getRoster } from "./_lib/providers.js";
 import { chatSystemPrompt, agentSystemPrompt, filesContextMessage } from "./_lib/brain.js";
 import { searchWeb, searchContext, newsHeadlines, newsContext } from "./_lib/search.js";
 import { gatherLiveData } from "./_lib/tools.js";
@@ -100,6 +100,20 @@ export default async function handler(req, res) {
   // Model pinning: the conversation keeps the model it started with (e.g.
   // a chat that began on Qwen stays on Qwen) so its reasoning stays coherent.
   const preferredModel = typeof body.preferredModel === "string" ? body.preferredModel.slice(0, 120) : "";
+  // Engine selection from the model picker: values look like "engine:<id>"
+  // (e.g. engine:nemotron-ultra). Resolved against roster.options — the user
+  // picks a MODEL and that exact engine goes FIRST in the chain, with the
+  // rest of the roster kept as automatic fallback.
+  const selRaw = String(body.provider || "").trim();
+  const isEngineSel = selRaw.startsWith("engine:");
+  let engineModel = "";
+  if (isEngineSel) {
+    const selId = selRaw.slice("engine:".length);
+    const opts = getRoster().options || [];
+    const opt = opts.find((o) => o && o.id === selId);
+    engineModel = opt ? (mode === "agent" ? opt.agent || opt.chat : opt.chat || opt.agent) || "" : selId;
+  }
+  const effPref = engineModel || preferredModel;
   // Auto-resume: the client detected a dropped stream and sends the partial
   // answer so the engine continues from the exact cutoff point.
   const resumePartial = typeof body.partial === "string" ? body.partial.slice(0, 8000) : "";
@@ -125,13 +139,13 @@ export default async function handler(req, res) {
 
     // ---------- custom provider (user's own model) ----------
     let custom = null;
-    if (user) {
+    if (user && !isEngineSel) {
       const saved = await listModels(user.folder).catch(() => []);
       // Use a custom provider ONLY when the user explicitly selected one for
       // this conversation (body.provider). An empty selection ALWAYS means
       // the default Professor engine — never silently fall back to the
       // first active custom provider, which ignored the user's Default pick.
-      const wanted = String(body.provider || "").trim();
+      const wanted = selRaw;
       const rec = wanted
         ? saved.find((p) => p.name === wanted || p.modelId === wanted)
         : null;
@@ -340,7 +354,7 @@ export default async function handler(req, res) {
       signal: abort.signal,
       onDelta: delta,
       onStatus: status,
-      preferredModel,
+      preferredModel: effPref,
     });
 
     // ---- Agent staged pipeline (autopilot: keeps going until complete) ----
@@ -381,7 +395,7 @@ export default async function handler(req, res) {
             signal: abort.signal,
             onDelta: delta,
             onStatus: status,
-            preferredModel,
+            preferredModel: effPref,
           });
           continue;
         }
@@ -391,7 +405,7 @@ export default async function handler(req, res) {
           status("Continuing the build…");
           const lastBlock = blocks[blocks.length - 1];
           const cont = await generateAnswer({
-            preferredModel,
+            preferredModel: effPref,
             messages: [
               ...finalMessages,
               { role: "assistant", content: result.text },
@@ -418,7 +432,7 @@ export default async function handler(req, res) {
           const list = [...new Set(bad.map((b) => b.path))];
           status("Repairing incomplete files…");
           const fill = await generateAnswer({
-            preferredModel,
+            preferredModel: effPref,
             messages: [
               ...finalMessages,
               { role: "assistant", content: result.text },
@@ -458,7 +472,7 @@ export default async function handler(req, res) {
           selfTested = true;
           status("Self-testing the build…");
           const review = await generateAnswer({
-            preferredModel,
+            preferredModel: effPref,
             messages: [
               ...finalMessages,
               { role: "assistant", content: result.text },

@@ -93,6 +93,7 @@ export function getRoster() {
       if (parsed && Array.isArray(parsed.providers) && parsed.providers.length) {
         data = {
           providers: parsed.providers,
+          options: Array.isArray(parsed.options) ? parsed.options : [],
           limits: { ...FALLBACK_ROSTER.limits, ...(parsed.limits || {}) },
         };
         break;

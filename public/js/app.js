@@ -15,6 +15,9 @@ window.PFApp = (() => {
   let mode = "chat";
   let streaming = false;
   let abortCtrl = null;
+  let userStopped = false; // stop button vs. watchdog abort (watchdog allows resume)
+  let lastStreamActivity = 0;
+  let stallTimer = null;
   let providers = []; // user's custom providers [{name, modelId,…}]
 
   const sessionsKey = () => `professor-ai.sessions.${lsPrefix}`;
@@ -168,7 +171,10 @@ window.PFApp = (() => {
   }
 
   function switchSession(id) {
-    if (streaming || id === currentId) { closeSideMobile(); return; }
+    if (id === currentId) { closeSideMobile(); return; }
+    // switching chats mid-stream is allowed: the running answer is stopped
+    // and preserved in its own chat
+    if (streaming) stop();
     currentId = id;
     saveCurrentId(id);
     const s = current();
@@ -451,6 +457,21 @@ window.PFApp = (() => {
   }
 
   /* ============================ model picker (below composer, upward dropdown) ============================ */
+  // Built-in ENGINE list — mirrors brain/models.json "options". Each entry
+  // routes to a live-tested free endpoint; "engine:<id>" travels in the
+  // provider field and the server resolves the exact model.
+  const ENGINES = [
+    { id: "auto", label: "Auto — best available" },
+    { id: "qwen-max", label: "Qwen 3.5 397B" },
+    { id: "qwen-coder", label: "Qwen 3.6 Coder" },
+    { id: "nemotron-ultra", label: "Nemotron-3-Ultra 550B" },
+    { id: "nemotron-super", label: "Nemotron-3-Super 120B" },
+    { id: "ling", label: "Ling 3.0 Flash" },
+    { id: "step", label: "Step 3.7 Flash" },
+    { id: "gpt-oss", label: "GPT-OSS Relay" },
+  ];
+  const engineLabel = (id) => (ENGINES.find((e) => e.id === id) || {}).label || id;
+
   // Per-conversation lock: once a session has messages, its provider is fixed.
   // The last choice is remembered and becomes the default for new chats.
   let mpOpen = false;
@@ -462,7 +483,8 @@ window.PFApp = (() => {
   }
 
   function providerLabel(v) {
-    if (!v) return "Default";
+    if (!v) return engineLabel("auto");
+    if (v.startsWith("engine:")) return engineLabel(v.slice(7));
     const p = providers.find((x) => (x.name || x.modelId) === v);
     return p ? p.name || p.modelId : v;
   }
@@ -472,7 +494,10 @@ window.PFApp = (() => {
   // fall back to the default engine (never a dead selection).
   function setProviders(list) {
     providers = Array.isArray(list) ? list : [];
-    const stillThere = (v) => !v || providers.some((x) => (x.name || x.modelId) === v);
+    // engine:<id> selections are always valid (built-in roster) — only
+    // custom-provider selections can become dead when a provider is deleted.
+    const stillThere = (v) =>
+      !v || v.startsWith("engine:") || providers.some((x) => (x.name || x.modelId) === v);
     if (!stillThere(loadLastModel())) {
       saveLastModel("");
     }
@@ -491,14 +516,15 @@ window.PFApp = (() => {
     const locked = s && s.messages && s.messages.length > 0;
     const chosen = chosenProvider();
 
-    const mk = (label, value, isCustom) => {
+    const mk = (label, value, kind) => {
       const b = document.createElement("button");
-      b.className = "mp-option" + ((value || "") === chosen ? " active" : "") + (isCustom ? " custom" : "");
+      b.className = "mp-option" + ((value || "") === chosen ? " active" : "") + (kind === "custom" ? " custom" : "");
       b.dataset.provider = value || "";
       b.setAttribute("role", "option");
+      const tag = kind === "custom" ? "custom" : kind === "engine" ? "engine" : "auto";
       b.innerHTML =
         `<span class="mp-name">${PFMD.esc(label)}</span>` +
-        (value ? '<span class="mp-tag">custom</span>' : '<span class="mp-tag">built-in</span>');
+        `<span class="mp-tag">${tag}</span>`;
       b.disabled = locked && (value || "") !== chosen;
       b.addEventListener("click", () => {
         if (locked) return;
@@ -512,9 +538,11 @@ window.PFApp = (() => {
       return b;
     };
 
-    box.appendChild(mk("Default — Professor engine", "", false));
+    for (const e of ENGINES) {
+      box.appendChild(mk(e.label, e.id === "auto" ? "" : "engine:" + e.id, e.id === "auto" ? "auto" : "engine"));
+    }
     for (const p of providers) {
-      box.appendChild(mk(p.name || p.modelId, p.name || p.modelId, true));
+      box.appendChild(mk(p.name || p.modelId, p.name || p.modelId, "custom"));
     }
 
     $("mpCurrent").textContent = providerLabel(chosen);
@@ -586,6 +614,8 @@ window.PFApp = (() => {
     text = String(text || "").trim();
     if (!text || (streaming && !resumeOf)) return;
     const s = ensureSession();
+    userStopped = false;
+    startStallWatchdog();
 
     // Resuming NEVER re-sends the user's message: during a resume the last
     // stored record is the live ASSISTANT turn, so the old role check wrongly
@@ -735,14 +765,16 @@ window.PFApp = (() => {
           let d;
           try { d = JSON.parse(line.slice(5).trim()); } catch { continue; }
 
-          if (d.type === "ping") continue;
+          if (d.type === "ping") { touchStream(); continue; }
           if (d.type === "status") {
+            touchStream();
             if (hud && !gotFirst) hud.set(d.text);
             if (!gotFirst) {
               statusEl.hidden = false;
               statusEl.querySelector("span:last-child").textContent = d.text;
             }
           } else if (d.type === "delta") {
+            touchStream();
             if (!gotFirst) {
               gotFirst = true;
               statusEl.hidden = true;
@@ -777,6 +809,7 @@ window.PFApp = (() => {
 
     clearTimeout(renderTimer);
     clearTimeout(ingestTimer);
+    stopStallWatchdog();
     statusEl.hidden = true;
     typingEl.hidden = true;
 
@@ -785,8 +818,10 @@ window.PFApp = (() => {
     // stream actually produced new content, reconnect and continue from the
     // exact cutoff. No-new-content drops (provider stuck) stop here — the
     // user gets a clear Continue button instead of an infinite retry loop.
+    // A watchdog abort (hung stream) still auto-resumes: the user did NOT
+    // press stop, so the answer continues instead of freezing on Thinking.
     const producedNew = raw.length > (resumeCtx.raw || "").length;
-    if (!gotDone && !aiMsg._error && raw && abortCtrl && !abortCtrl.signal.aborted &&
+    if (!gotDone && !aiMsg._error && raw && !userStopped &&
         producedNew && resumeCtx.attempt < MAX_AUTO_RESUME) {
       if (hud) hud.set("Reconnecting…");
       setStreaming(false);
@@ -893,8 +928,32 @@ window.PFApp = (() => {
   }
 
   function stop() {
+    userStopped = true;
     if (abortCtrl) abortCtrl.abort();
   }
+
+  // ---- STALL WATCHDOG (fixes the "stuck on Thinking forever" freeze) ----
+  // If the SSE connection produces NOTHING (no delta, no ping, no status)
+  // for too long — a dead serverless function or a hung provider — the
+  // stream is aborted and the normal auto-resume path takes over. A manual
+  // stop never triggers this (userStopped flag), so the user is still in
+  // charge of stopping.
+  function startStallWatchdog() {
+    stopStallWatchdog();
+    lastStreamActivity = Date.now();
+    stallTimer = setInterval(() => {
+      if (!streaming || !abortCtrl) { stopStallWatchdog(); return; }
+      const budget = mode === "agent" ? 180000 : 90000; // agent models queue longer
+      if (Date.now() - lastStreamActivity > budget) {
+        stopStallWatchdog();
+        try { abortCtrl.abort(); } catch { /* noop */ }
+      }
+    }, 5000);
+  }
+  function stopStallWatchdog() {
+    if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+  }
+  function touchStream() { lastStreamActivity = Date.now(); }
 
   /* ============================ auto-fix (agent) ============================ */
   function wireAgent() {
@@ -918,7 +977,14 @@ window.PFApp = (() => {
 
     $("btnModeChat").addEventListener("click", () => setMode("chat"));
     $("btnModeAgent").addEventListener("click", () => setMode("agent"));
-    $("btnNew").addEventListener("click", () => { if (!streaming) { newSession(); closeSideMobile(); } });
+    // New chat works DURING a stream too: the running answer is stopped
+    // (kept as-is in the old chat) and a fresh chat opens — the old code
+    // left the user trapped while "Thinking" hung.
+    $("btnNew").addEventListener("click", () => {
+      if (streaming) stop();
+      newSession();
+      closeSideMobile();
+    });
     $("btnOpenSide").addEventListener("click", openSide);
     $("btnCloseSide").addEventListener("click", closeSide);
     $("btnToggleSide").addEventListener("click", toggleSide);
@@ -1004,43 +1070,53 @@ window.PFApp = (() => {
       // RESTORE: if this browser has no local sessions for the account
       // (fresh login, new device, sign-out/sign-in), pull the saved
       // conversations from the private DB so the history is never lost.
-      if (!sessions.length) {
-        fetch("/api/history")
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => {
-            if (d && Array.isArray(d.chats) && d.chats.length && !sessions.length) {
-              for (const c of d.chats) {
-                sessions.push({
-                  id: "srv-" + c.path.replace(/[^a-z0-9]/gi, "").slice(-40),
-                  title: c.title || "Conversation",
-                  mode: c.mode === "agent" ? "agent" : "chat",
-                  provider: c.model && c.model !== "default" ? c.model : "",
-                  created: c.createdAt ? Date.parse(c.createdAt) || Date.now() : Date.now(),
-                  messages: (c.messages || []).map((m) => ({
-                    role: m.role,
-                    content: m.content,
-                    model: m.role === "assistant" ? (c.model !== "default" ? c.model : null) : undefined,
-                  })),
-                  files: [],
-                });
-              }
-              // newest-first ordering, then select the most recent chat
-              sessions.sort((a, b) => (b.created || 0) - (a.created || 0));
-              currentId = sessions.length ? sessions[0].id : null;
-              saveCurrentId(currentId);
-              saveSessions();
-              renderMessages();
-              renderSessionList();
-              renderModelPicker();
-              const s2 = current();
-              if (s2) {
-                setMode(s2.mode || "chat", { soft: true });
-                PFAgent.reset();
-              }
-            }
-          })
-          .catch(() => {});
-      }
+      // The guard tolerates the ONE empty auto-created session that init()
+      // may have spawned while the fetch was in flight — it is replaced by
+      // the server history instead of blocking the restore (this race was
+      // exactly why history looked wiped after re-login).
+      fetch("/api/history")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const onlyEmptyAuto =
+            sessions.length === 1 &&
+            sessions[0].id.startsWith("s") &&
+            !(sessions[0].messages || []).length;
+          const canRestore =
+            d && Array.isArray(d.chats) && d.chats.length &&
+            (!sessions.length || onlyEmptyAuto);
+          if (!canRestore) return;
+          const imported = [];
+          for (const c of d.chats) {
+            imported.push({
+              id: "srv-" + c.path.replace(/[^a-z0-9]/gi, "").slice(-40),
+              title: c.title || "Conversation",
+              mode: c.mode === "agent" ? "agent" : "chat",
+              provider: c.model && c.model !== "default" ? c.model : "",
+              created: c.createdAt ? Date.parse(c.createdAt) || Date.now() : Date.now(),
+              messages: (c.messages || []).map((m) => ({
+                role: m.role,
+                content: m.content,
+                model: m.role === "assistant" ? (c.model !== "default" ? c.model : null) : undefined,
+              })),
+              files: [],
+            });
+          }
+          // newest-first ordering, then select the most recent chat
+          imported.sort((a, b) => (b.created || 0) - (a.created || 0));
+          sessions = imported;
+          currentId = sessions[0].id;
+          saveCurrentId(currentId);
+          saveSessions();
+          renderMessages();
+          renderSessionList();
+          renderModelPicker();
+          const s2 = current();
+          if (s2) {
+            setMode(s2.mode || "chat", { soft: true });
+            PFAgent.reset();
+          }
+        })
+        .catch(() => {});
 
       // only create a fresh session if the account has none anywhere
       if (!current()) newSession();
@@ -1050,7 +1126,8 @@ window.PFApp = (() => {
         .catch(() => {});
     },
     onLogout() {
-      // wipe in-memory data and clear per-account storage on sign-out
+      // server-side history (private DB) is NEVER touched on sign-out —
+      // the next login restores the full conversation list via /api/history
       sessions = [];
       currentId = null;
       saveCurrentId(null);

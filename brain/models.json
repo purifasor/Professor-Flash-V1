@@ -1,36 +1,99 @@
 {
-  "$comment": "Professor engine roster v3 — priority chain: 1) OVH Qwen3.5-397B-A17B (default) → 2) Kilo NVIDIA Nemotron-3-Ultra-550B → 3) Kilo InclusionAI Ling-3.0 (substitute for the retired Ring-2.6-1T, same vendor family) → emergency keyless fallback. Chat deadlines are tighter than agent deadlines: Nemotron-Ultra queues for a few minutes, which the agent pipeline can absorb but chat cannot. Read live by api/_lib/providers.js; edit and push to re-tune.",
+  "$comment": "Professor engine roster v4 — user-selectable engines. Every endpoint in 'options' was live-tested before shipping (2026-09-12). 'options' defines what the client model picker shows; each option maps to a real provider + model with an ordered fallback chain. The default chain (no selection) is option 'auto'. Retired endpoints (unturf qwen closed, opencode zen auth-walled, cloudflare websocket-only) are NOT included.",
   "providers": [
     {
       "id": "ovh",
-      "label": "Professor Core",
+      "label": "Qwen 3.5 397B",
       "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
       "type": "openai",
       "chat": ["Qwen3.5-397B-A17B"],
       "agent": ["Qwen3.5-397B-A17B"]
     },
     {
+      "id": "unturf",
+      "label": "Qwen 3.6 Coder",
+      "url": "https://hermes.ai.unturf.com/v1/chat/completions",
+      "type": "openai",
+      "reasoningOff": false,
+      "chat": ["Lorbus/Qwen3.6-27B-int4-AutoRound"],
+      "agent": ["Lorbus/Qwen3.6-27B-int4-AutoRound"]
+    },
+    {
       "id": "kilo",
-      "label": "Professor Prime",
+      "label": "Nemotron / Ling / Step",
       "url": "https://api.kilo.ai/api/gateway/chat/completions",
       "type": "openai",
       "chat": [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "stepfun/step-3.7-flash:free",
         "inclusionai/ling-3.0-flash-sante:free"
       ],
       "agent": [
         "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "stepfun/step-3.7-flash:free",
         "inclusionai/ling-3.0-flash-sante:free"
       ]
     },
     {
       "id": "pollinations",
-      "label": "Professor Relay",
+      "label": "GPT-OSS Relay",
       "url": "https://text.pollinations.ai/openai",
       "type": "openai",
       "reasoningOff": false,
       "chat": ["openai-fast"],
       "agent": ["openai-fast"]
+    }
+  ],
+  "options": [
+    {
+      "id": "auto",
+      "label": "Auto — best available",
+      "chat": "Qwen3.5-397B-A17B",
+      "agent": "nvidia/nemotron-3-ultra-550b-a55b:free"
+    },
+    {
+      "id": "qwen-max",
+      "label": "Qwen 3.5 397B",
+      "chat": "Qwen3.5-397B-A17B",
+      "agent": "Qwen3.5-397B-A17B"
+    },
+    {
+      "id": "qwen-coder",
+      "label": "Qwen 3.6 Coder",
+      "chat": "Lorbus/Qwen3.6-27B-int4-AutoRound",
+      "agent": "Lorbus/Qwen3.6-27B-int4-AutoRound"
+    },
+    {
+      "id": "nemotron-ultra",
+      "label": "Nemotron-3-Ultra 550B",
+      "chat": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "agent": "nvidia/nemotron-3-ultra-550b-a55b:free"
+    },
+    {
+      "id": "nemotron-super",
+      "label": "Nemotron-3-Super 120B",
+      "chat": "nvidia/nemotron-3-super-120b-a12b:free",
+      "agent": "nvidia/nemotron-3-super-120b-a12b:free"
+    },
+    {
+      "id": "ling",
+      "label": "Ling 3.0 Flash",
+      "chat": "inclusionai/ling-3.0-flash-sante:free",
+      "agent": "inclusionai/ling-3.0-flash-sante:free"
+    },
+    {
+      "id": "step",
+      "label": "Step 3.7 Flash",
+      "chat": "stepfun/step-3.7-flash:free",
+      "agent": "stepfun/step-3.7-flash:free"
+    },
+    {
+      "id": "gpt-oss",
+      "label": "GPT-OSS Relay",
+      "chat": "openai-fast",
+      "agent": "openai-fast"
     }
   ],
   "limits": {
